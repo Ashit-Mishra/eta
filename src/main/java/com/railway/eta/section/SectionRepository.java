@@ -7,4 +7,8 @@ import java.util.Optional;
 public interface SectionRepository extends JpaRepository<Section, Long> {
 
     Optional<Section> findBySectionCode(String sectionCode);
+    Optional<Section> findByFromStationIdAndToStationId(
+            Long fromStationId,
+            Long toStationId
+    );
 }

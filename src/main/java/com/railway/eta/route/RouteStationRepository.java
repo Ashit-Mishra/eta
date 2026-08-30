@@ -10,4 +10,5 @@ public interface RouteStationRepository
     List<RouteStation> findByRouteRouteCodeOrderBySequenceNumber(
             String routeCode
     );
+    List<RouteStation> findByRouteIdOrderBySequenceNumberAsc(Long routeId);
 }
