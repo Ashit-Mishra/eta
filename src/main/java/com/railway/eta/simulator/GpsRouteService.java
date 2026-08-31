@@ -1,5 +1,7 @@
 package com.railway.eta.simulator;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.railway.eta.route.RouteStation;
 import com.railway.eta.route.RouteStationRepository;
 import com.railway.eta.train.Train;
@@ -16,6 +18,8 @@ public class GpsRouteService {
     private final TrainRepository trainRepository;
     private final RouteStationRepository routeStationRepository;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     public GpsRouteService(
             TrainRepository trainRepository,
             RouteStationRepository routeStationRepository
@@ -28,7 +32,7 @@ public class GpsRouteService {
     public List<SimulatedSegment> loadRoute(String trainNo) {
 
         // ----------------------------------------------------
-        // Find train
+        // 1. Find train
         // ----------------------------------------------------
 
         Train train = trainRepository
@@ -40,32 +44,29 @@ public class GpsRouteService {
                 );
 
         // ----------------------------------------------------
-        // Get route ID
+        // 2. Get route
         // ----------------------------------------------------
 
-        Long routeId = train.getRoute().getId();
+        var route = train.getRoute();
+
+        Long routeId = route.getId();
 
         // ----------------------------------------------------
-        // Load route stations in sequence
+        // 3. Load stations in correct order
         // ----------------------------------------------------
 
         List<RouteStation> routeStations =
                 routeStationRepository
-                        .findByRouteIdOrderBySequenceNumberAsc(
-                                routeId
-                        );
+                        .findByRouteIdOrderBySequenceNumberAsc(routeId);
 
         if (routeStations.size() < 2) {
             throw new RuntimeException(
-                    "Train route must contain at least two stations"
+                    "Route must contain at least two stations"
             );
         }
 
         // ----------------------------------------------------
-        // Convert JPA entities to plain objects
-        //
-        // This happens INSIDE the transaction so that
-        // lazy-loaded Station entities can be accessed safely.
+        // 4. Convert database stations into simulation objects
         // ----------------------------------------------------
 
         List<SimulatedStation> stations =
@@ -95,14 +96,41 @@ public class GpsRouteService {
                         .toList();
 
         // ----------------------------------------------------
-        // Build segments
+        // 5. Parse real LineString
+        // ----------------------------------------------------
+
+        List<SimulatedPoint> geometryPoints =
+                parseGeometry(route.getGeometryJson());
+
+        System.out.println(
+                "Loaded real LineString with "
+                        + geometryPoints.size()
+                        + " points"
+        );
+
+        // ----------------------------------------------------
+        // 6. Current dataset:
         //
-        // 69 stations = 68 segments
+        // 69 stations
+        // 69 geometry points
         //
-        // NDLS → DSB
-        // DSB  → SZM
-        // SZM  → DAZ
-        // ...
+        // Therefore each geometry point corresponds to the
+        // station at the same sequence position.
+        // ----------------------------------------------------
+
+        if (geometryPoints.size() != stations.size()) {
+
+            throw new RuntimeException(
+                    "Station/geometry count mismatch. "
+                            + "Stations = "
+                            + stations.size()
+                            + ", Geometry points = "
+                            + geometryPoints.size()
+            );
+        }
+
+        // ----------------------------------------------------
+        // 7. Build segments
         // ----------------------------------------------------
 
         List<SimulatedSegment> segments =
@@ -116,30 +144,174 @@ public class GpsRouteService {
             SimulatedStation to =
                     stations.get(i + 1);
 
+            /*
+             * For now each station-to-station segment contains
+             * the LineString points between those stations.
+             *
+             * With the current dataset there is one geometry
+             * point per station, so each segment contains:
+             *
+             *     point[i]
+             *     point[i + 1]
+             */
+
+            List<SimulatedPoint> segmentGeometry =
+                    List.of(
+                            geometryPoints.get(i),
+                            geometryPoints.get(i + 1)
+                    );
+
+            // Calculate actual distance along the geometry
             double distanceKm =
-                    calculateDistance(
-                            from.latitude(),
-                            from.longitude(),
-                            to.latitude(),
-                            to.longitude()
+                    calculateGeometryDistance(
+                            segmentGeometry
                     );
 
             segments.add(
                     new SimulatedSegment(
                             from,
                             to,
-                            distanceKm
+                            distanceKm,
+                            segmentGeometry
                     )
+            );
+
+            System.out.printf(
+                    "%s → %s | %.3f km | %d geometry points%n",
+                    from.code(),
+                    to.code(),
+                    distanceKm,
+                    segmentGeometry.size()
             );
         }
 
         return segments;
     }
 
+    // ========================================================
+    // Parse GeoJSON LineString
+    // ========================================================
 
-    // --------------------------------------------------------
-    // Haversine distance calculation
-    // --------------------------------------------------------
+    private List<SimulatedPoint> parseGeometry(
+            String geometryJson
+    ) {
+
+        if (geometryJson == null
+                || geometryJson.isBlank()) {
+
+            throw new RuntimeException(
+                    "Route has no geometry"
+            );
+        }
+
+        try {
+
+            JsonNode geometry =
+                    objectMapper.readTree(geometryJson);
+
+            JsonNode type =
+                    geometry.get("type");
+
+            if (type == null
+                    || !"LineString".equals(type.asText())) {
+
+                throw new RuntimeException(
+                        "Route geometry is not a LineString"
+                );
+            }
+
+            JsonNode coordinates =
+                    geometry.get("coordinates");
+
+            if (coordinates == null
+                    || !coordinates.isArray()) {
+
+                throw new RuntimeException(
+                        "LineString has no valid coordinates"
+                );
+            }
+
+            List<SimulatedPoint> points =
+                    new ArrayList<>();
+
+            for (JsonNode coordinate : coordinates) {
+
+                if (!coordinate.isArray()
+                        || coordinate.size() < 2) {
+
+                    throw new RuntimeException(
+                            "Invalid coordinate in LineString"
+                    );
+                }
+
+                /*
+                 * GeoJSON:
+                 *
+                 * [longitude, latitude]
+                 */
+
+                double longitude =
+                        coordinate
+                                .get(0)
+                                .asDouble();
+
+                double latitude =
+                        coordinate
+                                .get(1)
+                                .asDouble();
+
+                points.add(
+                        new SimulatedPoint(
+                                latitude,
+                                longitude
+                        )
+                );
+            }
+
+            return points;
+
+        } catch (Exception e) {
+
+            throw new RuntimeException(
+                    "Failed to parse route geometry",
+                    e
+            );
+        }
+    }
+
+    // ========================================================
+    // Calculate total distance along geometry
+    // ========================================================
+
+    private double calculateGeometryDistance(
+            List<SimulatedPoint> points
+    ) {
+
+        double totalDistance = 0.0;
+
+        for (int i = 0; i < points.size() - 1; i++) {
+
+            SimulatedPoint a =
+                    points.get(i);
+
+            SimulatedPoint b =
+                    points.get(i + 1);
+
+            totalDistance +=
+                    calculateDistance(
+                            a.latitude(),
+                            a.longitude(),
+                            b.latitude(),
+                            b.longitude()
+                    );
+        }
+
+        return totalDistance;
+    }
+
+    // ========================================================
+    // Haversine distance
+    // ========================================================
 
     private double calculateDistance(
             double latitude1,

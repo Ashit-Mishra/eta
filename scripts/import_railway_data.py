@@ -134,9 +134,40 @@ def find_train(trains_data, train_number):
         properties = feature.get("properties", {})
 
         if properties.get("number") == train_number:
-            return properties
+            # Return the complete GeoJSON feature so we keep both
+            # train properties and the real LineString geometry.
+            return feature
 
     return None
+
+
+def extract_line_string_geometry(train_feature):
+    """
+    Extract the real railway LineString from trains.json.
+
+    GeoJSON coordinates are stored as:
+        [longitude, latitude]
+
+    Returns the geometry as a JSON string so PostgreSQL can store it
+    without requiring PostGIS.
+    """
+
+    geometry = train_feature.get("geometry")
+
+    if not geometry:
+        raise RuntimeError("Train has no geometry")
+
+    if geometry.get("type") != "LineString":
+        raise RuntimeError(
+            f"Expected LineString geometry, got {geometry.get('type')}"
+        )
+
+    coordinates = geometry.get("coordinates")
+
+    if not coordinates or len(coordinates) < 2:
+        raise RuntimeError("Train LineString contains fewer than 2 coordinates")
+
+    return json.dumps(geometry, separators=(",", ":"))
 
 
 # ============================================================
@@ -183,11 +214,18 @@ def import_train(train_number):
             f"Train {train_number} not found in trains.json"
         )
 
-    print(f"Train found: {train_data['name']}")
+    train_properties = train_data["properties"]
+    geometry_json = extract_line_string_geometry(train_data)
+
+    print(f"Train found: {train_properties['name']}")
     print(
         f"Route: "
-        f"{train_data['from_station_code']} → "
-        f"{train_data['to_station_code']}"
+        f"{train_properties['from_station_code']} → "
+        f"{train_properties['to_station_code']}"
+    )
+    print(
+        f"Geometry: LineString with "
+        f"{len(train_data['geometry']['coordinates'])} coordinates"
     )
 
     # --------------------------------------------------------
@@ -292,7 +330,7 @@ def import_train(train_number):
         # ====================================================
 
         route_code = train_number
-        route_name = train_data["name"]
+        route_name = train_properties["name"]
 
         print()
         print("Creating route...")
@@ -300,17 +338,19 @@ def import_train(train_number):
         cursor.execute(
             """
             INSERT INTO routes
-                (route_code, name, created_at)
+                (route_code, name, geometry_json, created_at)
             VALUES
-                (%s, %s, %s)
+                (%s, %s, %s, %s)
             ON CONFLICT (route_code)
             DO UPDATE SET
-                name = EXCLUDED.name
+                name = EXCLUDED.name,
+                geometry_json = EXCLUDED.geometry_json
             RETURNING id;
             """,
             (
                 route_code,
                 route_name,
+                geometry_json,
                 get_now()
             )
         )
@@ -340,7 +380,7 @@ def import_train(train_number):
             """,
             (
                 train_number,
-                train_data["name"],
+                train_properties["name"],
                 route_id,
                 get_now()
             )
@@ -418,7 +458,7 @@ def import_train(train_number):
         print("IMPORT SUCCESSFUL")
         print("=" * 60)
         print(f"Train       : {train_number}")
-        print(f"Train name  : {train_data['name']}")
+        print(f"Train name  : {train_properties['name']}")
         print(f"Route ID    : {route_id}")
         print(f"Train ID    : {train_id}")
         print(f"Stations    : {len(station_ids)}")

@@ -27,4 +27,7 @@ public class Route {
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
+    @Column(name = "geometry_json", columnDefinition = "TEXT")
+    private String geometryJson;
+
 }

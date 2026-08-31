@@ -26,10 +26,10 @@ public class GpsSimulator {
     // Current simulated speed
     private double speedKmh = 80.0;
 
-    // Used to calculate how much real time passed
+    // Used to calculate elapsed time
     private long lastUpdateTime;
 
-    // Train we are currently simulating
+    // Train currently being simulated
     private final String trainNo = "12031";
 
 
@@ -57,10 +57,12 @@ public class GpsSimulator {
         }
 
         if (segments.isEmpty()) {
+
             System.out.println(
                     "No route segments found for train "
                             + trainNo
             );
+
             return;
         }
 
@@ -82,9 +84,6 @@ public class GpsSimulator {
         // ----------------------------------------------------
         // Convert speed into distance travelled
         //
-        // speed = km/hour
-        // time  = seconds
-        //
         // distance = speed × time / 3600
         // ----------------------------------------------------
 
@@ -103,10 +102,10 @@ public class GpsSimulator {
         while (
                 currentSegment < segments.size()
                         &&
-                        distanceTravelledKm
-                                >= segments
-                                .get(currentSegment)
-                                .distanceKm()
+                        distanceTravelledKm >=
+                                segments
+                                        .get(currentSegment)
+                                        .distanceKm()
         ) {
 
             double segmentDistance =
@@ -160,14 +159,18 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
-        // Calculate progress through current segment
+        // Calculate progress
         // ----------------------------------------------------
 
-        double progress =
-                distanceTravelledKm
-                        / segment.distanceKm();
+        double progress = 0.0;
 
-        // Protect against floating-point issues
+        if (segment.distanceKm() > 0) {
+
+            progress =
+                    distanceTravelledKm
+                            / segment.distanceKm();
+        }
+
         progress =
                 Math.max(
                         0.0,
@@ -176,26 +179,21 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
-        // Interpolate GPS position
+        // Get GPS position from REAL LineString
         // ----------------------------------------------------
 
+        SimulatedPoint currentPoint =
+                getPointAlongGeometry(
+                        segment.geometryPoints(),
+                        distanceTravelledKm
+                );
+
+
         double latitude =
-                from.latitude()
-                        +
-                        (
-                                to.latitude()
-                                        - from.latitude()
-                        )
-                                * progress;
+                currentPoint.latitude();
 
         double longitude =
-                from.longitude()
-                        +
-                        (
-                                to.longitude()
-                                        - from.longitude()
-                        )
-                                * progress;
+                currentPoint.longitude();
 
 
         // ----------------------------------------------------
@@ -276,6 +274,172 @@ public class GpsSimulator {
 
 
     /**
+     * Find the GPS position corresponding to a distance
+     * travelled along the LineString.
+     */
+    private SimulatedPoint getPointAlongGeometry(
+            List<SimulatedPoint> points,
+            double travelledKm
+    ) {
+
+        if (points == null || points.isEmpty()) {
+
+            throw new RuntimeException(
+                    "Segment contains no geometry points"
+            );
+        }
+
+
+        // Only one point
+        if (points.size() == 1) {
+            return points.get(0);
+        }
+
+
+        double remainingDistance =
+                travelledKm;
+
+
+        // ----------------------------------------------------
+        // Walk through every LineString segment
+        // ----------------------------------------------------
+
+        for (int i = 0; i < points.size() - 1; i++) {
+
+            SimulatedPoint start =
+                    points.get(i);
+
+            SimulatedPoint end =
+                    points.get(i + 1);
+
+
+            double segmentDistance =
+                    calculateDistance(
+                            start.latitude(),
+                            start.longitude(),
+                            end.latitude(),
+                            end.longitude()
+                    );
+
+
+            // ------------------------------------------------
+            // Is our train position inside this geometry piece?
+            // ------------------------------------------------
+
+            if (remainingDistance <= segmentDistance) {
+
+                if (segmentDistance == 0) {
+                    return end;
+                }
+
+
+                double progress =
+                        remainingDistance
+                                / segmentDistance;
+
+
+                progress =
+                        Math.max(
+                                0.0,
+                                Math.min(1.0, progress)
+                        );
+
+
+                double latitude =
+                        start.latitude()
+                                +
+                                (
+                                        end.latitude()
+                                                - start.latitude()
+                                )
+                                        * progress;
+
+
+                double longitude =
+                        start.longitude()
+                                +
+                                (
+                                        end.longitude()
+                                                - start.longitude()
+                                )
+                                        * progress;
+
+
+                return new SimulatedPoint(
+                        latitude,
+                        longitude
+                );
+            }
+
+
+            remainingDistance -=
+                    segmentDistance;
+        }
+
+
+        // ----------------------------------------------------
+        // If distance exceeds geometry, return final point
+        // ----------------------------------------------------
+
+        return points.get(
+                points.size() - 1
+        );
+    }
+
+
+    /**
+     * Haversine distance between two GPS coordinates.
+     */
+    private double calculateDistance(
+            double latitude1,
+            double longitude1,
+            double latitude2,
+            double longitude2
+    ) {
+
+        final double EARTH_RADIUS_KM = 6371.0;
+
+
+        double lat1 =
+                Math.toRadians(latitude1);
+
+        double lat2 =
+                Math.toRadians(latitude2);
+
+
+        double deltaLat =
+                Math.toRadians(
+                        latitude2 - latitude1
+                );
+
+        double deltaLon =
+                Math.toRadians(
+                        longitude2 - longitude1
+                );
+
+
+        double a =
+                Math.sin(deltaLat / 2)
+                        * Math.sin(deltaLat / 2)
+                        +
+                        Math.cos(lat1)
+                                * Math.cos(lat2)
+                                * Math.sin(deltaLon / 2)
+                                * Math.sin(deltaLon / 2);
+
+
+        double c =
+                2 * Math.atan2(
+                        Math.sqrt(a),
+                        Math.sqrt(1 - a)
+                );
+
+
+        return EARTH_RADIUS_KM * c;
+    }
+
+
+    /**
      * Load the real train route from PostgreSQL.
      */
     private void initialize() {
@@ -289,6 +453,7 @@ public class GpsSimulator {
         currentSegment = 0;
 
         distanceTravelledKm = 0.0;
+
 
         System.out.println(
                 "========================================"
