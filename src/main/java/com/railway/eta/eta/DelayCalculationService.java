@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -34,19 +35,22 @@ public class DelayCalculationService {
     public double calculateDelayMinutes(String trainNo) {
 
         // ----------------------------------------------------
-        // Get current live train state
+        // 1. Get live train state
         // ----------------------------------------------------
 
         TrainState state =
                 trainStateService.get(trainNo);
 
         if (state == null) {
+
             throw new RuntimeException(
-                    "No live state found for train " + trainNo
+                    "No live state found for train "
+                            + trainNo
             );
         }
 
         if (state.getLastUpdated() == null) {
+
             throw new RuntimeException(
                     "Train state has no timestamp"
             );
@@ -54,7 +58,7 @@ public class DelayCalculationService {
 
 
         // ----------------------------------------------------
-        // Get train
+        // 2. Get train
         // ----------------------------------------------------
 
         Train train =
@@ -62,13 +66,14 @@ public class DelayCalculationService {
                         .findByTrainNo(trainNo)
                         .orElseThrow(() ->
                                 new RuntimeException(
-                                        "Train not found: " + trainNo
+                                        "Train not found: "
+                                                + trainNo
                                 )
                         );
 
 
         // ----------------------------------------------------
-        // Get ordered route stations
+        // 3. Get ordered route stations
         // ----------------------------------------------------
 
         List<RouteStation> routeStations =
@@ -78,14 +83,16 @@ public class DelayCalculationService {
                         );
 
         if (routeStations.isEmpty()) {
+
             throw new RuntimeException(
-                    "No route stations found for train " + trainNo
+                    "No route stations found for train "
+                            + trainNo
             );
         }
 
 
         // ----------------------------------------------------
-        // Find next station
+        // 4. Find next station
         // ----------------------------------------------------
 
         RouteStation nextStation =
@@ -100,7 +107,7 @@ public class DelayCalculationService {
 
 
         // ----------------------------------------------------
-        // We need scheduled arrival
+        // 5. Check scheduled arrival
         // ----------------------------------------------------
 
         LocalTime scheduledArrivalTime =
@@ -112,7 +119,7 @@ public class DelayCalculationService {
 
 
         // ----------------------------------------------------
-        // Calculate predicted arrival
+        // 6. Calculate predicted arrival
         // ----------------------------------------------------
 
         Instant predictedArrival =
@@ -120,23 +127,22 @@ public class DelayCalculationService {
 
 
         // ----------------------------------------------------
-        // Convert schedule time into an Instant
-        //
-        // We use the SAME simulation date as the GPS event.
+        // 7. Calculate scheduled arrival
         // ----------------------------------------------------
 
         Instant scheduledArrival =
                 createScheduledArrival(
                         state.getLastUpdated(),
-                        scheduledArrivalTime
+                        nextStation
                 );
 
 
         // ----------------------------------------------------
-        // Delay
+        // 8. Calculate delay
         //
-        // positive = late
-        // negative = early
+        // Positive  = delayed
+        // Negative  = early
+        // Zero      = on time
         // ----------------------------------------------------
 
         long delaySeconds =
@@ -150,7 +156,7 @@ public class DelayCalculationService {
 
 
     // ========================================================
-    // Find next RouteStation
+    // Find next station from route
     // ========================================================
 
     private RouteStation findNextStation(
@@ -180,7 +186,7 @@ public class DelayCalculationService {
 
 
     // ========================================================
-    // Predicted arrival
+    // Calculate predicted arrival
     // ========================================================
 
     private Instant calculatePredictedArrival(
@@ -193,19 +199,35 @@ public class DelayCalculationService {
         double distanceKm =
                 state.getDistanceToNextStationKm();
 
+        /*
+         * If the train isn't moving, we cannot make
+         * a meaningful prediction.
+         */
+
         if (speedKmh <= 0) {
 
             return state.getLastUpdated();
         }
 
 
-        // distance / speed = hours
+        /*
+         * time = distance / speed
+         *
+         * Example:
+         *
+         * distance = 1.5 km
+         * speed    = 80 km/h
+         *
+         * time = 1.5 / 80 hours
+         */
 
         double hours =
                 distanceKm / speedKmh;
 
 
-        // Convert hours to milliseconds
+        /*
+         * Convert hours to milliseconds.
+         */
 
         long milliseconds =
                 (long) (
@@ -223,37 +245,61 @@ public class DelayCalculationService {
 
 
     // ========================================================
-    // Create scheduled arrival Instant
+    // Convert schedule time into an Instant
     // ========================================================
 
     private Instant createScheduledArrival(
             Instant simulationTimestamp,
-            LocalTime scheduledTime
+            RouteStation routeStation
     ) {
 
         /*
-         * Convert the GPS simulation timestamp into the
-         * simulation day's date.
+         * The GPS simulator timestamp is in UTC.
          *
          * Example:
          *
-         * GPS timestamp:
-         * 2026-09-01T01:50:05Z
+         * 2026-09-01T01:50:00Z
          *
-         * Scheduled arrival:
-         * 07:35 IST
+         * = 07:20 IST
          *
-         * 07:35 IST = 02:05 UTC
+         * We use the date from the simulation timestamp.
          */
 
-        var simulationDate =
+        LocalDate simulationDate =
                 simulationTimestamp
                         .atZone(ZoneOffset.UTC)
                         .toLocalDate();
 
 
-        return scheduledTime
-                .atDate(simulationDate)
+        // ----------------------------------------------------
+        // Get schedule day
+        // ----------------------------------------------------
+
+        int scheduleDay =
+                routeStation.getDay() == null
+                        ? 1
+                        : routeStation.getDay();
+
+
+        /*
+         * Day 1 = simulation date
+         * Day 2 = simulation date + 1
+         * Day 3 = simulation date + 2
+         */
+
+        LocalDate scheduledDate =
+                simulationDate.plusDays(
+                        scheduleDay - 1L
+                );
+
+
+        // ----------------------------------------------------
+        // Convert schedule time from IST to UTC
+        // ----------------------------------------------------
+
+        return routeStation
+                .getArrivalTime()
+                .atDate(scheduledDate)
                 .atZone(
                         ZoneOffset.ofHoursMinutes(
                                 5,

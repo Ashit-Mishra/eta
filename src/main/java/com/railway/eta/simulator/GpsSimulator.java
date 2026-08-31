@@ -24,6 +24,10 @@ public class GpsSimulator {
     private final TrainRepository trainRepository;
     private final RouteStationRepository routeStationRepository;
 
+    // ========================================================
+    // Route
+    // ========================================================
+
     // Real route segments loaded from PostgreSQL
     private List<SimulatedSegment> segments;
 
@@ -33,21 +37,74 @@ public class GpsSimulator {
     // Distance travelled on the current segment
     private double distanceTravelledKm = 0.0;
 
-    // Current simulated speed
-    private double speedKmh = 80.0;
 
-    // Used to calculate elapsed real time
-    private long lastUpdateTime;
+    // ========================================================
+    // Speed
+    // ========================================================
 
+    // Normal train speed
+    private static final double NORMAL_SPEED_KMH = 80.0;
+
+    // Speed during simulated disruption
+    private static final double DELAY_SPEED_KMH = 45.0;
+
+    private double speedKmh = NORMAL_SPEED_KMH;
+
+
+    // ========================================================
     // Simulation clock
+    // ========================================================
+
     private Instant simulationTime;
 
-    // Real time used to advance simulation clock
+    // Real system time used to advance simulation clock
     private long lastRealTime;
 
-    // Train currently being simulated
+
+    // ========================================================
+    // Controlled delay simulation
+    // ========================================================
+
+    /*
+     * The slowdown will start 30 seconds after the simulation
+     * begins.
+     *
+     * This is deliberately short so that we can easily test
+     * the delay system.
+     */
+    private static final long DELAY_START_AFTER_SECONDS = 30;
+
+
+    /*
+     * The slowdown lasts for 45 seconds.
+     */
+    private static final long DELAY_DURATION_SECONDS = 45;
+
+
+    /*
+     * Keeps track of when the simulation started.
+     */
+    private Instant simulationStartTime;
+
+
+    /*
+     * Prevents the slowdown from being triggered repeatedly.
+     */
+    private boolean delayTriggered = false;
+
+    private boolean delayActive = false;
+
+
+    // ========================================================
+    // Train
+    // ========================================================
+
     private final String trainNo = "12031";
 
+
+    // ========================================================
+    // Constructor
+    // ========================================================
 
     public GpsSimulator(
             GpsEventProducer producer,
@@ -61,6 +118,10 @@ public class GpsSimulator {
         this.routeStationRepository = routeStationRepository;
     }
 
+
+    // ========================================================
+    // Main simulation loop
+    // ========================================================
 
     /**
      * Generate one GPS position every 2 seconds.
@@ -109,6 +170,13 @@ public class GpsSimulator {
                 simulationTime.plusMillis(
                         (long) (elapsedSeconds * 1000)
                 );
+
+
+        // ----------------------------------------------------
+        // Check for simulated delay
+        // ----------------------------------------------------
+
+        updateDelayState();
 
 
         // ----------------------------------------------------
@@ -307,10 +375,154 @@ public class GpsSimulator {
         );
 
         System.out.println(
+                "Status      : "
+                        + (delayActive
+                        ? "DELAY / SLOWDOWN"
+                        : "NORMAL")
+        );
+
+        System.out.println(
                 "========================================"
         );
     }
 
+
+    // ========================================================
+    // Delay simulation
+    // ========================================================
+
+    private void updateDelayState() {
+
+        if (simulationStartTime == null) {
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // Calculate how long the simulation has been running
+        // ----------------------------------------------------
+
+        long simulationElapsedSeconds =
+                java.time.Duration
+                        .between(
+                                simulationStartTime,
+                                simulationTime
+                        )
+                        .getSeconds();
+
+
+        // ----------------------------------------------------
+        // Start delay
+        // ----------------------------------------------------
+
+        if (
+                !delayTriggered
+                        &&
+                        simulationElapsedSeconds
+                                >= DELAY_START_AFTER_SECONDS
+        ) {
+
+            delayTriggered = true;
+
+            delayActive = true;
+
+            speedKmh = DELAY_SPEED_KMH;
+
+
+            System.out.println();
+            System.out.println(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            );
+
+            System.out.println(
+                    "SIMULATED DELAY STARTED"
+            );
+
+            System.out.println(
+                    "Train       : " + trainNo
+            );
+
+            System.out.println(
+                    "Normal speed: "
+                            + NORMAL_SPEED_KMH
+                            + " km/h"
+            );
+
+            System.out.println(
+                    "Delay speed : "
+                            + DELAY_SPEED_KMH
+                            + " km/h"
+            );
+
+            System.out.println(
+                    "Duration    : "
+                            + DELAY_DURATION_SECONDS
+                            + " seconds"
+            );
+
+            System.out.println(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            );
+
+            System.out.println();
+        }
+
+
+        // ----------------------------------------------------
+        // End delay
+        // ----------------------------------------------------
+
+        if (
+                delayActive
+                        &&
+                        simulationElapsedSeconds
+                                >=
+                                (
+                                        DELAY_START_AFTER_SECONDS
+                                                + DELAY_DURATION_SECONDS
+                                )
+        ) {
+
+            delayActive = false;
+
+            speedKmh = NORMAL_SPEED_KMH;
+
+
+            System.out.println();
+            System.out.println(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            );
+
+            System.out.println(
+                    "SIMULATED DELAY ENDED"
+            );
+
+            System.out.println(
+                    "Train       : " + trainNo
+            );
+
+            System.out.println(
+                    "Speed       : "
+                            + NORMAL_SPEED_KMH
+                            + " km/h"
+            );
+
+            System.out.println(
+                    "Train has returned to normal speed."
+            );
+
+            System.out.println(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            );
+
+            System.out.println();
+        }
+    }
+
+
+    // ========================================================
+    // Geometry interpolation
+    // ========================================================
 
     /**
      * Find the GPS position corresponding to a distance
@@ -343,7 +555,7 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
-        // Walk through every LineString segment
+        // Walk through every LineString piece
         // ----------------------------------------------------
 
         for (int i = 0; i < points.size() - 1; i++) {
@@ -365,7 +577,7 @@ public class GpsSimulator {
 
 
             // ------------------------------------------------
-            // Is our train position inside this geometry piece?
+            // Is our train position inside this piece?
             // ------------------------------------------------
 
             if (remainingDistance <= segmentDistance) {
@@ -429,6 +641,10 @@ public class GpsSimulator {
     }
 
 
+    // ========================================================
+    // Haversine distance
+    // ========================================================
+
     /**
      * Haversine distance between two GPS coordinates.
      */
@@ -481,6 +697,10 @@ public class GpsSimulator {
     }
 
 
+    // ========================================================
+    // Initialization
+    // ========================================================
+
     /**
      * Load the real train route from PostgreSQL.
      */
@@ -490,9 +710,6 @@ public class GpsSimulator {
                 gpsRouteService.loadRoute(trainNo);
 
 
-        lastUpdateTime =
-                System.currentTimeMillis();
-
         lastRealTime =
                 System.currentTimeMillis();
 
@@ -500,9 +717,15 @@ public class GpsSimulator {
 
         distanceTravelledKm = 0.0;
 
+        speedKmh = NORMAL_SPEED_KMH;
+
+        delayTriggered = false;
+
+        delayActive = false;
+
 
         // ----------------------------------------------------
-        // Load train from database
+        // Load train
         // ----------------------------------------------------
 
         Train train =
@@ -592,6 +815,14 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
+        // Store simulation start
+        // ----------------------------------------------------
+
+        simulationStartTime =
+                simulationTime;
+
+
+        // ----------------------------------------------------
         // Logging
         // ----------------------------------------------------
 
@@ -613,6 +844,30 @@ public class GpsSimulator {
 
         System.out.println(
                 "Schedule : " + simulationTime
+        );
+
+        System.out.println(
+                "Normal speed : "
+                        + NORMAL_SPEED_KMH
+                        + " km/h"
+        );
+
+        System.out.println(
+                "Delay speed  : "
+                        + DELAY_SPEED_KMH
+                        + " km/h"
+        );
+
+        System.out.println(
+                "Delay starts : "
+                        + DELAY_START_AFTER_SECONDS
+                        + " sec"
+        );
+
+        System.out.println(
+                "Delay lasts  : "
+                        + DELAY_DURATION_SECONDS
+                        + " sec"
         );
 
         System.out.println(
