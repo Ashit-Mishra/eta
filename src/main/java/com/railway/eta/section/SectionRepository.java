@@ -2,6 +2,7 @@ package com.railway.eta.section;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface SectionRepository extends JpaRepository<Section, Long> {
@@ -11,4 +12,5 @@ public interface SectionRepository extends JpaRepository<Section, Long> {
             Long fromStationId,
             Long toStationId
     );
+    List<Section> findByFromStationIdIn(List<Long> stationIds);
 }
