@@ -2,6 +2,8 @@ package com.railway.eta.ingestion.kafka;
 
 import com.railway.eta.eta.TrainState;
 import com.railway.eta.eta.TrainStateService;
+import com.railway.eta.history.GpsHistory;
+import com.railway.eta.history.GpsHistoryRepository;
 import com.railway.eta.ingestion.dto.GpsEvent;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -11,10 +13,18 @@ public class GpsEventConsumer {
 
     private final TrainStateService trainStateService;
 
+    private final GpsHistoryRepository gpsHistoryRepository;
+
+
     public GpsEventConsumer(
-            TrainStateService trainStateService
+            TrainStateService trainStateService,
+            GpsHistoryRepository gpsHistoryRepository
     ) {
-        this.trainStateService = trainStateService;
+        this.trainStateService =
+                trainStateService;
+
+        this.gpsHistoryRepository =
+                gpsHistoryRepository;
     }
 
 
@@ -23,42 +33,95 @@ public class GpsEventConsumer {
             groupId = "railway-eta",
             containerFactory = "kafkaListenerContainerFactory"
     )
-        public void consume(GpsEvent event) {
+    public void consume(GpsEvent event) {
 
-            TrainState state =
-                    new TrainState();
+        // ====================================================
+        // 1. UPDATE LIVE TRAIN STATE
+        // ====================================================
 
-            state.setTrainNo(
-                    event.trainNo()
-            );
+        TrainState state =
+                new TrainState();
 
-            state.setLatitude(
-                    event.latitude()
-            );
+        state.setTrainNo(
+                event.trainNo()
+        );
 
-            state.setLongitude(
-                    event.longitude()
-            );
+        state.setLatitude(
+                event.latitude()
+        );
 
-            state.setSpeedKmh(
-                    event.speedKmh()
-            );
+        state.setLongitude(
+                event.longitude()
+        );
 
-            state.setLastUpdated(
-                    event.timestamp()
-            );
+        state.setSpeedKmh(
+                event.speedKmh()
+        );
 
-            state.setStatus("RUNNING");
+        state.setLastUpdated(
+                event.timestamp()
+        );
 
-            trainStateService.update(state);
+        state.setStatus(
+                "RUNNING"
+        );
 
-            System.out.println(
-                    "Live Train State Updated: "
-                            + state.getTrainNo()
-                            + " | "
-                            + state.getLatitude()
-                            + ", "
-                            + state.getLongitude()
-            );
+        trainStateService.update(
+                state
+        );
+
+
+        // ====================================================
+        // 2. SAVE GPS HISTORY
+        // ====================================================
+
+        GpsHistory history =
+                new GpsHistory();
+
+        history.setTrainNo(
+                event.trainNo()
+        );
+
+        history.setLatitude(
+                event.latitude()
+        );
+
+        history.setLongitude(
+                event.longitude()
+        );
+
+        history.setSpeedKmh(
+                event.speedKmh()
+        );
+
+        history.setTimestamp(
+                event.timestamp()
+        );
+
+        gpsHistoryRepository.save(
+                history
+        );
+
+
+        // ====================================================
+        // 3. LOG
+        // ====================================================
+
+        System.out.println(
+                "Live Train State Updated: "
+                        + state.getTrainNo()
+                        + " | "
+                        + state.getLatitude()
+                        + ", "
+                        + state.getLongitude()
+        );
+
+        System.out.println(
+                "GPS History Saved: "
+                        + event.trainNo()
+                        + " | speed="
+                        + event.speedKmh()
+                        + " km/h"
+        );
     }
 }
