@@ -6,11 +6,13 @@ import org.springframework.stereotype.Service;
 public class EtaCalculationService {
 
     private final TrainStateService trainStateService;
+    private final DelayCalculationService delayCalculationService;
 
     public EtaCalculationService(
-            TrainStateService trainStateService
+            TrainStateService trainStateService, DelayCalculationService delayCalculationService
     ) {
         this.trainStateService = trainStateService;
+        this.delayCalculationService = delayCalculationService;
     }
 
     public EtaResponse calculateEta(String trainNo) {
@@ -47,6 +49,10 @@ public class EtaCalculationService {
         double etaToDestination =
                 (distanceToDestination / speedKmh) * 60;
 
+        double delayMinutes =
+                delayCalculationService
+                        .calculateDelayMinutes(trainNo);
+
         return new EtaResponse(
                 trainNo,
                 state.getCurrentStation(),
@@ -55,7 +61,8 @@ public class EtaCalculationService {
                 distanceToDestination,
                 speedKmh,
                 etaToNext,
-                etaToDestination
+                etaToDestination,
+                delayMinutes
         );
     }
 }

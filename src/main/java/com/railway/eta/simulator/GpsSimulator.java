@@ -2,10 +2,18 @@ package com.railway.eta.simulator;
 
 import com.railway.eta.ingestion.dto.GpsEvent;
 import com.railway.eta.ingestion.kafka.GpsEventProducer;
+import com.railway.eta.route.RouteStation;
+import com.railway.eta.route.RouteStationRepository;
+import com.railway.eta.train.Train;
+import com.railway.eta.train.TrainRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 
 @Component
@@ -13,6 +21,8 @@ public class GpsSimulator {
 
     private final GpsEventProducer producer;
     private final GpsRouteService gpsRouteService;
+    private final TrainRepository trainRepository;
+    private final RouteStationRepository routeStationRepository;
 
     // Real route segments loaded from PostgreSQL
     private List<SimulatedSegment> segments;
@@ -26,8 +36,14 @@ public class GpsSimulator {
     // Current simulated speed
     private double speedKmh = 80.0;
 
-    // Used to calculate elapsed time
+    // Used to calculate elapsed real time
     private long lastUpdateTime;
+
+    // Simulation clock
+    private Instant simulationTime;
+
+    // Real time used to advance simulation clock
+    private long lastRealTime;
 
     // Train currently being simulated
     private final String trainNo = "12031";
@@ -35,10 +51,14 @@ public class GpsSimulator {
 
     public GpsSimulator(
             GpsEventProducer producer,
-            GpsRouteService gpsRouteService
+            GpsRouteService gpsRouteService,
+            TrainRepository trainRepository,
+            RouteStationRepository routeStationRepository
     ) {
         this.producer = producer;
         this.gpsRouteService = gpsRouteService;
+        this.trainRepository = trainRepository;
+        this.routeStationRepository = routeStationRepository;
     }
 
 
@@ -68,17 +88,27 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
-        // Calculate elapsed time
+        // Calculate elapsed real time
         // ----------------------------------------------------
 
         long currentTime =
                 System.currentTimeMillis();
 
         double elapsedSeconds =
-                (currentTime - lastUpdateTime)
+                (currentTime - lastRealTime)
                         / 1000.0;
 
-        lastUpdateTime = currentTime;
+        lastRealTime = currentTime;
+
+
+        // ----------------------------------------------------
+        // Advance simulation clock
+        // ----------------------------------------------------
+
+        simulationTime =
+                simulationTime.plusMillis(
+                        (long) (elapsedSeconds * 1000)
+                );
 
 
         // ----------------------------------------------------
@@ -133,6 +163,11 @@ public class GpsSimulator {
                         "Train "
                                 + trainNo
                                 + " reached its destination."
+                );
+
+                System.out.println(
+                        "Simulation time: "
+                                + simulationTime
                 );
 
                 System.out.println(
@@ -206,7 +241,7 @@ public class GpsSimulator {
                         latitude,
                         longitude,
                         speedKmh,
-                        Instant.now()
+                        simulationTime
                 );
 
 
@@ -268,6 +303,10 @@ public class GpsSimulator {
         );
 
         System.out.println(
+                "Simulation  : " + simulationTime
+        );
+
+        System.out.println(
                 "========================================"
         );
     }
@@ -290,7 +329,10 @@ public class GpsSimulator {
         }
 
 
+        // ----------------------------------------------------
         // Only one point
+        // ----------------------------------------------------
+
         if (points.size() == 1) {
             return points.get(0);
         }
@@ -447,13 +489,111 @@ public class GpsSimulator {
         segments =
                 gpsRouteService.loadRoute(trainNo);
 
+
         lastUpdateTime =
+                System.currentTimeMillis();
+
+        lastRealTime =
                 System.currentTimeMillis();
 
         currentSegment = 0;
 
         distanceTravelledKm = 0.0;
 
+
+        // ----------------------------------------------------
+        // Load train from database
+        // ----------------------------------------------------
+
+        Train train =
+                trainRepository
+                        .findByTrainNo(trainNo)
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Train not found: "
+                                                + trainNo
+                                )
+                        );
+
+
+        // ----------------------------------------------------
+        // Load ordered route stations
+        // ----------------------------------------------------
+
+        List<RouteStation> routeStations =
+                routeStationRepository
+                        .findByRouteIdOrderBySequenceNumberAsc(
+                                train.getRoute().getId()
+                        );
+
+
+        if (routeStations.isEmpty()) {
+
+            throw new RuntimeException(
+                    "No route stations found for train "
+                            + trainNo
+            );
+        }
+
+
+        // ----------------------------------------------------
+        // Get first station departure time
+        // ----------------------------------------------------
+
+        RouteStation firstStation =
+                routeStations.get(0);
+
+        LocalTime departureTime =
+                firstStation.getDepartureTime();
+
+
+        if (departureTime == null) {
+
+            throw new RuntimeException(
+                    "No departure time found for train "
+                            + trainNo
+            );
+        }
+
+
+        // ----------------------------------------------------
+        // Get schedule day
+        // ----------------------------------------------------
+
+        int scheduleDay =
+                firstStation.getDay() == null
+                        ? 1
+                        : firstStation.getDay();
+
+
+        // ----------------------------------------------------
+        // Create simulation date
+        // ----------------------------------------------------
+
+        LocalDate simulationDate =
+                LocalDate.now()
+                        .plusDays(scheduleDay - 1L);
+
+
+        ZoneId zone =
+                ZoneId.systemDefault();
+
+
+        // ----------------------------------------------------
+        // Initialize simulation clock
+        // ----------------------------------------------------
+
+        simulationTime =
+                ZonedDateTime.of(
+                        simulationDate,
+                        departureTime,
+                        zone
+                ).toInstant();
+
+
+        // ----------------------------------------------------
+        // Logging
+        // ----------------------------------------------------
 
         System.out.println(
                 "========================================"
@@ -469,6 +609,10 @@ public class GpsSimulator {
 
         System.out.println(
                 "Segments : " + segments.size()
+        );
+
+        System.out.println(
+                "Schedule : " + simulationTime
         );
 
         System.out.println(

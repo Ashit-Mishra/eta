@@ -8,6 +8,7 @@ public record EtaResponse(
         double distanceToDestinationKm,
         double speedKmh,
         double etaToNextStationMinutes,
-        double etaToDestinationMinutes
+        double etaToDestinationMinutes,
+        double delayMinutes
 ) {
 }
