@@ -10,4 +10,8 @@ public interface GpsHistoryRepository
     List<GpsHistory> findByTrainNoOrderByTimestampAsc(
             String trainNo
     );
+
+    List<GpsHistory> findByRunIdOrderByTimestampAsc(
+            Long runId
+    );
 }

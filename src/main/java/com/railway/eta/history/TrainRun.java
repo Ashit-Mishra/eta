@@ -8,11 +8,11 @@ import lombok.NoArgsConstructor;
 import java.time.Instant;
 
 @Entity
-@Table(name = "gps_history")
+@Table(name = "train_runs")
 @Data
-@NoArgsConstructor
 @AllArgsConstructor
-public class GpsHistory {
+@NoArgsConstructor
+public class TrainRun {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -21,18 +21,15 @@ public class GpsHistory {
     @Column(name = "train_no", nullable = false)
     private String trainNo;
 
-    @Column(name = "run_id", nullable = false)
-    private Long runId;
+    @Column(name = "start_time", nullable = false)
+    private Instant startTime;
+
+    @Column(name = "end_time")
+    private Instant endTime;
+
+    @Column(name = "final_delay_minutes")
+    private Double finalDelayMinutes;
 
     @Column(nullable = false)
-    private double latitude;
-
-    @Column(nullable = false)
-    private double longitude;
-
-    @Column(name = "speed_kmh", nullable = false)
-    private double speedKmh;
-
-    @Column(nullable = false)
-    private Instant timestamp;
+    private String status;
 }

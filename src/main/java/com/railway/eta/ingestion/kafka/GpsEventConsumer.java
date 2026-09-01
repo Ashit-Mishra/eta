@@ -4,6 +4,7 @@ import com.railway.eta.eta.TrainState;
 import com.railway.eta.eta.TrainStateService;
 import com.railway.eta.history.GpsHistory;
 import com.railway.eta.history.GpsHistoryRepository;
+import com.railway.eta.history.StationArrivalHistoryService;
 import com.railway.eta.ingestion.dto.GpsEvent;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -12,16 +13,17 @@ import org.springframework.stereotype.Component;
 public class GpsEventConsumer {
 
     private final TrainStateService trainStateService;
-
+    private final StationArrivalHistoryService stationArrivalHistoryService;
     private final GpsHistoryRepository gpsHistoryRepository;
 
 
     public GpsEventConsumer(
-            TrainStateService trainStateService,
+            TrainStateService trainStateService, StationArrivalHistoryService stationArrivalHistoryService,
             GpsHistoryRepository gpsHistoryRepository
     ) {
         this.trainStateService =
                 trainStateService;
+        this.stationArrivalHistoryService = stationArrivalHistoryService;
 
         this.gpsHistoryRepository =
                 gpsHistoryRepository;
@@ -82,6 +84,10 @@ public class GpsEventConsumer {
                 event.trainNo()
         );
 
+        history.setRunId(
+                event.runId()
+        );
+
         history.setLatitude(
                 event.latitude()
         );
@@ -100,6 +106,14 @@ public class GpsEventConsumer {
 
         gpsHistoryRepository.save(
                 history
+        );
+
+        // ====================================================
+       // 3. CHECK FOR STATION ARRIVAL
+      // ====================================================
+
+        stationArrivalHistoryService.processArrival(
+                event
         );
 
 

@@ -1,5 +1,7 @@
 package com.railway.eta.simulator;
 
+import com.railway.eta.history.TrainRun;
+import com.railway.eta.history.TrainRunService;
 import com.railway.eta.ingestion.dto.GpsEvent;
 import com.railway.eta.ingestion.kafka.GpsEventProducer;
 import com.railway.eta.route.RouteStation;
@@ -23,6 +25,7 @@ public class GpsSimulator {
     private final GpsRouteService gpsRouteService;
     private final TrainRepository trainRepository;
     private final RouteStationRepository routeStationRepository;
+    private final TrainRunService trainRunService;
 
     // ========================================================
     // REAL ROUTE
@@ -102,6 +105,8 @@ public class GpsSimulator {
 
     private Instant simulationStartTime;
 
+    private Long currentRunId;
+
 
     // ========================================================
     // CONSTRUCTOR
@@ -111,12 +116,14 @@ public class GpsSimulator {
             GpsEventProducer producer,
             GpsRouteService gpsRouteService,
             TrainRepository trainRepository,
-            RouteStationRepository routeStationRepository
+            RouteStationRepository routeStationRepository,
+            TrainRunService trainRunService
     ) {
         this.producer = producer;
         this.gpsRouteService = gpsRouteService;
         this.trainRepository = trainRepository;
         this.routeStationRepository = routeStationRepository;
+        this.trainRunService = trainRunService;
     }
 
 
@@ -244,6 +251,31 @@ public class GpsSimulator {
                         "========================================"
                 );
 
+
+                // --------------------------------------------
+                // Complete TrainRun
+                // --------------------------------------------
+
+                if (currentRunId != null) {
+
+                    /*
+                     * Temporary value.
+                     *
+                     * We will replace this with the actual
+                     * schedule-vs-actual destination delay
+                     * in the next step.
+                     */
+                    double finalDelayMinutes = 0.0;
+
+                    trainRunService.completeRun(
+                            currentRunId,
+                            simulationTime,
+                            finalDelayMinutes
+                    );
+
+                    currentRunId = null;
+                }
+
                 return;
             }
         }
@@ -308,10 +340,13 @@ public class GpsSimulator {
         GpsEvent event =
                 new GpsEvent(
                         trainNo,
+                        currentRunId,
                         latitude,
                         longitude,
                         speedKmh,
-                        simulationTime
+                        simulationTime,
+                        from.code(),
+                        to.code()
                 );
 
 
@@ -416,7 +451,8 @@ public class GpsSimulator {
 
         if (elapsedSimulationSeconds < 30) {
 
-            newDelayType = DelayType.NONE;
+            newDelayType =
+                    DelayType.NONE;
         }
 
 
@@ -427,7 +463,8 @@ public class GpsSimulator {
 
         else if (elapsedSimulationSeconds < 75) {
 
-            newDelayType = DelayType.SPEED;
+            newDelayType =
+                    DelayType.SPEED;
         }
 
 
@@ -438,7 +475,8 @@ public class GpsSimulator {
 
         else if (elapsedSimulationSeconds < 105) {
 
-            newDelayType = DelayType.NONE;
+            newDelayType =
+                    DelayType.NONE;
         }
 
 
@@ -449,7 +487,8 @@ public class GpsSimulator {
 
         else if (elapsedSimulationSeconds < 135) {
 
-            newDelayType = DelayType.SIGNAL;
+            newDelayType =
+                    DelayType.SIGNAL;
         }
 
 
@@ -460,7 +499,8 @@ public class GpsSimulator {
 
         else if (elapsedSimulationSeconds < 165) {
 
-            newDelayType = DelayType.NONE;
+            newDelayType =
+                    DelayType.NONE;
         }
 
 
@@ -471,7 +511,8 @@ public class GpsSimulator {
 
         else if (elapsedSimulationSeconds < 225) {
 
-            newDelayType = DelayType.WEATHER;
+            newDelayType =
+                    DelayType.WEATHER;
         }
 
 
@@ -482,7 +523,8 @@ public class GpsSimulator {
 
         else {
 
-            newDelayType = DelayType.NONE;
+            newDelayType =
+                    DelayType.NONE;
         }
 
 
@@ -499,6 +541,7 @@ public class GpsSimulator {
 
             printDelayEvent();
         }
+
         else {
 
             // Make sure speed stays correct.
@@ -692,9 +735,11 @@ public class GpsSimulator {
         // Walk through every LineString piece
         // ----------------------------------------------------
 
-        for (int i = 0;
-             i < points.size() - 1;
-             i++) {
+        for (
+                int i = 0;
+                i < points.size() - 1;
+                i++
+        ) {
 
             SimulatedPoint start =
                     points.get(i);
@@ -788,7 +833,8 @@ public class GpsSimulator {
             double longitude2
     ) {
 
-        final double EARTH_RADIUS_KM = 6371.0;
+        final double EARTH_RADIUS_KM =
+                6371.0;
 
 
         double lat1 =
@@ -960,6 +1006,20 @@ public class GpsSimulator {
 
 
         // ----------------------------------------------------
+        // START TRAIN RUN
+        // ----------------------------------------------------
+
+        TrainRun run =
+                trainRunService.startRun(
+                        trainNo,
+                        simulationStartTime
+                );
+
+        currentRunId =
+                run.getId();
+
+
+        // ----------------------------------------------------
         // Logging
         // ----------------------------------------------------
 
@@ -981,6 +1041,10 @@ public class GpsSimulator {
 
         System.out.println(
                 "Schedule : " + simulationTime
+        );
+
+        System.out.println(
+                "Run ID   : " + currentRunId
         );
 
         System.out.println(
