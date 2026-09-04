@@ -2,6 +2,9 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
+from collections import defaultdict
+
+import psycopg2
 
 
 # ============================================================
@@ -25,9 +28,6 @@ SCHEDULES_FILE = DATA_DIR / "schedules.json"
 # DATABASE
 # ============================================================
 
-import psycopg2
-
-
 def get_connection():
     return psycopg2.connect(
         host=DB_HOST,
@@ -50,12 +50,6 @@ def load_json(path):
 
 
 def parse_time(value):
-    """
-    Convert dataset time strings into Python time-compatible
-    strings for PostgreSQL.
-
-    Dataset uses 'None' for missing arrival/departure.
-    """
     if value is None or value == "None":
         return None
 
@@ -83,17 +77,10 @@ def load_data():
 # ============================================================
 
 def build_station_lookup(stations_data):
-    """
-    Build:
-
-        station_code -> station information
-
-    This allows us to quickly resolve a schedule's station_code.
-    """
 
     lookup = {}
 
-    for feature in stations_data["features"]:
+    for feature in stations_data.get("features", []):
 
         properties = feature.get("properties", {})
         geometry = feature.get("geometry")
@@ -107,6 +94,7 @@ def build_station_lookup(stations_data):
         longitude = None
 
         if geometry and geometry.get("type") == "Point":
+
             coordinates = geometry.get("coordinates")
 
             if coordinates and len(coordinates) >= 2:
@@ -124,33 +112,56 @@ def build_station_lookup(stations_data):
 
 
 # ============================================================
-# TRAIN
+# TRAINS
 # ============================================================
 
-def find_train(trains_data, train_number):
+def build_train_lookup(trains_data):
 
-    for feature in trains_data["features"]:
+    lookup = {}
+
+    for feature in trains_data.get("features", []):
 
         properties = feature.get("properties", {})
 
-        if properties.get("number") == train_number:
-            # Return the complete GeoJSON feature so we keep both
-            # train properties and the real LineString geometry.
-            return feature
+        train_number = properties.get("number")
 
-    return None
+        if not train_number:
+            continue
 
+        train_number = str(train_number)
+
+        lookup[train_number] = feature
+
+    return lookup
+
+
+# ============================================================
+# SCHEDULES
+# ============================================================
+
+def build_schedule_lookup(schedules_data):
+
+    lookup = defaultdict(list)
+
+    for record in schedules_data:
+
+        train_number = record.get("train_number")
+
+        if not train_number:
+            continue
+
+        train_number = str(train_number)
+
+        lookup[train_number].append(record)
+
+    return lookup
+
+
+# ============================================================
+# GEOMETRY
+# ============================================================
 
 def extract_line_string_geometry(train_feature):
-    """
-    Extract the real railway LineString from trains.json.
-
-    GeoJSON coordinates are stored as:
-        [longitude, latitude]
-
-    Returns the geometry as a JSON string so PostgreSQL can store it
-    without requiring PostGIS.
-    """
 
     geometry = train_feature.get("geometry")
 
@@ -159,106 +170,63 @@ def extract_line_string_geometry(train_feature):
 
     if geometry.get("type") != "LineString":
         raise RuntimeError(
-            f"Expected LineString geometry, got {geometry.get('type')}"
+            f"Expected LineString geometry, got "
+            f"{geometry.get('type')}"
         )
 
     coordinates = geometry.get("coordinates")
 
     if not coordinates or len(coordinates) < 2:
-        raise RuntimeError("Train LineString contains fewer than 2 coordinates")
-
-    return json.dumps(geometry, separators=(",", ":"))
-
-
-# ============================================================
-# SCHEDULE
-# ============================================================
-
-def find_schedule(schedules_data, train_number):
-
-    records = [
-        record
-        for record in schedules_data
-        if record.get("train_number") == train_number
-    ]
-
-    # The dataset records are already in route order.
-    return records
-
-
-# ============================================================
-# IMPORT
-# ============================================================
-
-def import_train(train_number):
-
-    print()
-    print("=" * 60)
-    print(f"Importing train {train_number}")
-    print("=" * 60)
-
-    # --------------------------------------------------------
-    # Load JSON
-    # --------------------------------------------------------
-
-    stations_data, trains_data, schedules_data = load_data()
-
-    # --------------------------------------------------------
-    # Find train
-    # --------------------------------------------------------
-
-    train_data = find_train(trains_data, train_number)
-
-    if not train_data:
         raise RuntimeError(
-            f"Train {train_number} not found in trains.json"
+            "Train LineString contains fewer than 2 coordinates"
         )
 
-    train_properties = train_data["properties"]
+    return json.dumps(
+        geometry,
+        separators=(",", ":")
+    )
+
+
+# ============================================================
+# IMPORT ONE TRAIN
+# ============================================================
+
+def import_train(
+    cursor,
+    train_number,
+    train_data,
+    schedule,
+    station_lookup
+):
+
+    train_properties = train_data.get("properties", {})
+
+    train_name = train_properties.get(
+        "name",
+        f"Train {train_number}"
+    )
+
+    # --------------------------------------------------------
+    # Geometry
+    # --------------------------------------------------------
+
     geometry_json = extract_line_string_geometry(train_data)
 
-    print(f"Train found: {train_properties['name']}")
-    print(
-        f"Route: "
-        f"{train_properties['from_station_code']} → "
-        f"{train_properties['to_station_code']}"
-    )
-    print(
-        f"Geometry: LineString with "
-        f"{len(train_data['geometry']['coordinates'])} coordinates"
-    )
+    coordinates = train_data["geometry"]["coordinates"]
 
     # --------------------------------------------------------
-    # Find schedule
-    # --------------------------------------------------------
-
-    schedule = find_schedule(
-        schedules_data,
-        train_number
-    )
-
-    if not schedule:
-        raise RuntimeError(
-            f"No schedule found for train {train_number}"
-        )
-
-    print(f"Schedule stops: {len(schedule)}")
-
-    # --------------------------------------------------------
-    # Build station lookup
-    # --------------------------------------------------------
-
-    station_lookup = build_station_lookup(stations_data)
-
-    # --------------------------------------------------------
-    # Verify stations before touching DB
+    # Verify schedule stations
     # --------------------------------------------------------
 
     missing_stations = []
 
     for stop in schedule:
 
-        station_code = stop["station_code"]
+        station_code = stop.get("station_code")
+
+        if not station_code:
+            missing_stations.append("(missing code)")
+            continue
 
         if station_code not in station_lookup:
             missing_stations.append(station_code)
@@ -270,215 +238,387 @@ def import_train(train_number):
             + ", ".join(missing_stations)
         )
 
-    print("All schedule stations found.")
+    # --------------------------------------------------------
+    # 1. IMPORT / UPDATE STATIONS
+    # --------------------------------------------------------
+
+    station_ids = {}
+
+    for stop in schedule:
+
+        station_code = stop["station_code"]
+
+        station = station_lookup[station_code]
+
+        cursor.execute(
+            """
+            INSERT INTO stations
+                (
+                    code,
+                    name,
+                    latitude,
+                    longitude,
+                    created_at
+                )
+            VALUES
+                (%s, %s, %s, %s, %s)
+
+            ON CONFLICT (code)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude
+
+            RETURNING id;
+            """,
+            (
+                station["code"],
+                station["name"],
+                station["latitude"],
+                station["longitude"],
+                get_now()
+            )
+        )
+
+        station_ids[station_code] = cursor.fetchone()[0]
 
     # --------------------------------------------------------
-    # Connect database
+    # 2. CREATE / UPDATE ROUTE
+    # --------------------------------------------------------
+
+    route_code = train_number
+
+    cursor.execute(
+        """
+        INSERT INTO routes
+            (
+                route_code,
+                name,
+                geometry_json,
+                created_at
+            )
+        VALUES
+            (%s, %s, %s, %s)
+
+        ON CONFLICT (route_code)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            geometry_json = EXCLUDED.geometry_json
+
+        RETURNING id;
+        """,
+        (
+            route_code,
+            train_name,
+            geometry_json,
+            get_now()
+        )
+    )
+
+    route_id = cursor.fetchone()[0]
+
+    # --------------------------------------------------------
+    # 3. CREATE / UPDATE TRAIN
+    # --------------------------------------------------------
+
+    cursor.execute(
+        """
+        INSERT INTO trains
+            (
+                train_no,
+                name,
+                route_id,
+                active,
+                created_at
+            )
+        VALUES
+            (%s, %s, %s, TRUE, %s)
+
+        ON CONFLICT (train_no)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            route_id = EXCLUDED.route_id
+
+        RETURNING id;
+        """,
+        (
+            train_number,
+            train_name,
+            route_id,
+            get_now()
+        )
+    )
+
+    train_id = cursor.fetchone()[0]
+
+    # --------------------------------------------------------
+    # 4. REMOVE OLD ROUTE STATIONS
+    # --------------------------------------------------------
+
+    cursor.execute(
+        """
+        DELETE FROM route_stations
+        WHERE route_id = %s;
+        """,
+        (route_id,)
+    )
+
+    # --------------------------------------------------------
+    # 5. CREATE ROUTE STATIONS
+    # --------------------------------------------------------
+
+    for sequence, stop in enumerate(schedule, start=1):
+
+        station_code = stop["station_code"]
+
+        station_id = station_ids[station_code]
+
+        arrival = parse_time(
+            stop.get("arrival")
+        )
+
+        departure = parse_time(
+            stop.get("departure")
+        )
+
+        day = stop.get("day")
+
+        cursor.execute(
+            """
+            INSERT INTO route_stations
+                (
+                    route_id,
+                    station_id,
+                    sequence_number,
+                    arrival_time,
+                    departure_time,
+                    day
+                )
+            VALUES
+                (%s, %s, %s, %s, %s, %s);
+            """,
+            (
+                route_id,
+                station_id,
+                sequence,
+                arrival,
+                departure,
+                day
+            )
+        )
+
+    return {
+        "train_id": train_id,
+        "route_id": route_id,
+        "station_count": len(station_ids),
+        "schedule_count": len(schedule),
+        "geometry_points": len(coordinates)
+    }
+
+
+# ============================================================
+# IMPORT ALL TRAINS
+# ============================================================
+
+def import_all():
+
+    print()
+    print("=" * 70)
+    print("RAILWAY DATA IMPORT")
+    print("=" * 70)
+    print()
+
+    # --------------------------------------------------------
+    # LOAD EVERYTHING ONCE
+    # --------------------------------------------------------
+
+    stations_data, trains_data, schedules_data = load_data()
+
+    print()
+    print("Building lookups...")
+
+    station_lookup = build_station_lookup(
+        stations_data
+    )
+
+    train_lookup = build_train_lookup(
+        trains_data
+    )
+
+    schedule_lookup = build_schedule_lookup(
+        schedules_data
+    )
+
+    print(
+        f"Stations available : {len(station_lookup)}"
+    )
+
+    print(
+        f"Trains available   : {len(train_lookup)}"
+    )
+
+    print(
+        f"Schedule trains    : {len(schedule_lookup)}"
+    )
+
+    print()
+
+    # --------------------------------------------------------
+    # CONNECT
     # --------------------------------------------------------
 
     connection = get_connection()
+
+    imported = 0
+    skipped = 0
+    total_geometry = 0
+
+    skipped_trains = []
 
     try:
 
         cursor = connection.cursor()
 
-        # ====================================================
-        # 1. IMPORT STATIONS
-        # ====================================================
+        total_trains = len(train_lookup)
 
+        print("=" * 70)
+        print(f"IMPORTING {total_trains} TRAINS")
+        print("=" * 70)
         print()
-        print("Importing stations...")
 
-        station_ids = {}
+        # ----------------------------------------------------
+        # PROCESS EVERY TRAIN
+        # ----------------------------------------------------
 
-        for stop in schedule:
+        for index, (train_number, train_data) in enumerate(
+            train_lookup.items(),
+            start=1
+        ):
 
-            station_code = stop["station_code"]
+            print(
+                f"[{index}/{total_trains}] "
+                f"Train {train_number}",
+                end=" "
+            )
 
-            station = station_lookup[station_code]
+            try:
 
-            cursor.execute(
-                """
-                INSERT INTO stations
-                    (code, name, latitude, longitude, created_at)
-                VALUES
-                    (%s, %s, %s, %s, %s)
-                ON CONFLICT (code)
-                DO UPDATE SET
-                    name = EXCLUDED.name,
-                    latitude = EXCLUDED.latitude,
-                    longitude = EXCLUDED.longitude
-                RETURNING id;
-                """,
-                (
-                    station["code"],
-                    station["name"],
-                    station["latitude"],
-                    station["longitude"],
-                    get_now()
+                schedule = schedule_lookup.get(
+                    train_number,
+                    []
                 )
-            )
 
-            station_id = cursor.fetchone()[0]
-
-            station_ids[station_code] = station_id
-
-        print(f"Stations imported/updated: {len(station_ids)}")
-
-        # ====================================================
-        # 2. CREATE ROUTE
-        # ====================================================
-
-        route_code = train_number
-        route_name = train_properties["name"]
-
-        print()
-        print("Creating route...")
-
-        cursor.execute(
-            """
-            INSERT INTO routes
-                (route_code, name, geometry_json, created_at)
-            VALUES
-                (%s, %s, %s, %s)
-            ON CONFLICT (route_code)
-            DO UPDATE SET
-                name = EXCLUDED.name,
-                geometry_json = EXCLUDED.geometry_json
-            RETURNING id;
-            """,
-            (
-                route_code,
-                route_name,
-                geometry_json,
-                get_now()
-            )
-        )
-
-        route_id = cursor.fetchone()[0]
-
-        print(f"Route ID: {route_id}")
-
-        # ====================================================
-        # 3. CREATE TRAIN
-        # ====================================================
-
-        print()
-        print("Creating train...")
-
-        cursor.execute(
-            """
-            INSERT INTO trains
-                (train_no, name, route_id, active, created_at)
-            VALUES
-                (%s, %s, %s, TRUE, %s)
-            ON CONFLICT (train_no)
-            DO UPDATE SET
-                name = EXCLUDED.name,
-                route_id = EXCLUDED.route_id
-            RETURNING id;
-            """,
-            (
-                train_number,
-                train_properties["name"],
-                route_id,
-                get_now()
-            )
-        )
-
-        train_id = cursor.fetchone()[0]
-
-        print(f"Train ID: {train_id}")
-
-        # ====================================================
-        # 4. REMOVE OLD ROUTE STATIONS
-        # ====================================================
-
-        cursor.execute(
-            """
-            DELETE FROM route_stations
-            WHERE route_id = %s;
-            """,
-            (route_id,)
-        )
-
-        # ====================================================
-        # 5. CREATE ROUTE STATIONS
-        # ====================================================
-
-        print()
-        print("Creating route stations...")
-
-        for sequence, stop in enumerate(schedule, start=1):
-
-            station_code = stop["station_code"]
-
-            station_id = station_ids[station_code]
-
-            arrival = parse_time(stop.get("arrival"))
-            departure = parse_time(stop.get("departure"))
-            day = stop.get("day")
-
-            cursor.execute(
-                """
-                INSERT INTO route_stations
-                    (
-                        route_id,
-                        station_id,
-                        sequence_number,
-                        arrival_time,
-                        departure_time,
-                        day
+                if not schedule:
+                    raise RuntimeError(
+                        "No schedule found"
                     )
-                VALUES
-                    (%s, %s, %s, %s, %s, %s);
-                """,
-                (
-                    route_id,
-                    station_id,
-                    sequence,
-                    arrival,
-                    departure,
-                    day
+
+                result = import_train(
+                    cursor,
+                    train_number,
+                    train_data,
+                    schedule,
+                    station_lookup
                 )
-            )
 
-        print(
-            f"Route stations created: {len(schedule)}"
-        )
+                # Commit every successful train.
+                # This prevents one bad train from
+                # rolling back everything imported before it.
 
-        # ====================================================
-        # COMMIT
-        # ====================================================
+                connection.commit()
 
-        connection.commit()
+                imported += 1
 
-        print()
-        print("=" * 60)
-        print("IMPORT SUCCESSFUL")
-        print("=" * 60)
-        print(f"Train       : {train_number}")
-        print(f"Train name  : {train_properties['name']}")
-        print(f"Route ID    : {route_id}")
-        print(f"Train ID    : {train_id}")
-        print(f"Stations    : {len(station_ids)}")
-        print(f"Route stops : {len(schedule)}")
-        print("=" * 60)
+                total_geometry += result[
+                    "geometry_points"
+                ]
 
-    except Exception:
+                print(
+                    f"✓ "
+                    f"{result['schedule_count']} stops, "
+                    f"{result['geometry_points']} geometry points"
+                )
 
-        connection.rollback()
+            except Exception as error:
 
-        print()
-        print("IMPORT FAILED")
-        print("Database transaction rolled back.")
+                connection.rollback()
 
-        raise
+                skipped += 1
+
+                skipped_trains.append(
+                    (
+                        train_number,
+                        str(error)
+                    )
+                )
+
+                print(
+                    f"✗ SKIPPED: {error}"
+                )
+
+        cursor.close()
 
     finally:
 
-        cursor.close()
         connection.close()
+
+    # --------------------------------------------------------
+    # SUMMARY
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("IMPORT COMPLETE")
+    print("=" * 70)
+
+    print(
+        f"Trains found       : {total_trains}"
+    )
+
+    print(
+        f"Trains imported    : {imported}"
+    )
+
+    print(
+        f"Trains skipped     : {skipped}"
+    )
+
+    print(
+        f"Total geometry pts : {total_geometry}"
+    )
+
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # SKIPPED TRAINS
+    # --------------------------------------------------------
+
+    if skipped_trains:
+
+        print()
+        print("=" * 70)
+        print("SKIPPED TRAINS")
+        print("=" * 70)
+
+        for train_number, reason in skipped_trains:
+
+            print(
+                f"{train_number}: {reason}"
+            )
+
+        print("=" * 70)
+
+    print()
+    print("Database verification:")
+    print()
+    print("  SELECT COUNT(*) FROM trains;")
+    print("  SELECT COUNT(*) FROM routes;")
+    print(
+        "  SELECT COUNT(*) FROM routes "
+        "WHERE geometry_json IS NOT NULL "
+        "AND geometry_json <> '';"
+    )
+    print()
 
 
 # ============================================================
@@ -487,15 +627,4 @@ def import_train(train_number):
 
 if __name__ == "__main__":
 
-    if len(sys.argv) != 2:
-
-        print(
-            "Usage:\n"
-            "  python import_railway_data.py 12031"
-        )
-
-        sys.exit(1)
-
-    train_number = sys.argv[1]
-
-    import_train(train_number)
+    import_all()

@@ -16,19 +16,17 @@ public class GpsEventConsumer {
     private final StationArrivalHistoryService stationArrivalHistoryService;
     private final GpsHistoryRepository gpsHistoryRepository;
 
-
     public GpsEventConsumer(
-            TrainStateService trainStateService, StationArrivalHistoryService stationArrivalHistoryService,
+            TrainStateService trainStateService,
+            StationArrivalHistoryService stationArrivalHistoryService,
             GpsHistoryRepository gpsHistoryRepository
     ) {
-        this.trainStateService =
-                trainStateService;
-        this.stationArrivalHistoryService = stationArrivalHistoryService;
-
+        this.trainStateService = trainStateService;
+        this.stationArrivalHistoryService =
+                stationArrivalHistoryService;
         this.gpsHistoryRepository =
                 gpsHistoryRepository;
     }
-
 
     @KafkaListener(
             topics = "train.gps.raw",
@@ -41,8 +39,7 @@ public class GpsEventConsumer {
         // 1. UPDATE LIVE TRAIN STATE
         // ====================================================
 
-        TrainState state =
-                new TrainState();
+        TrainState state = new TrainState();
 
         state.setTrainNo(
                 event.trainNo()
@@ -62,6 +59,18 @@ public class GpsEventConsumer {
 
         state.setLastUpdated(
                 event.timestamp()
+        );
+
+        state.setCurrentStation(
+                event.currentStation()
+        );
+
+        state.setNextStation(
+                event.nextStation()
+        );
+
+        state.setDelayType(
+                event.delayType()
         );
 
         state.setStatus(
@@ -104,13 +113,16 @@ public class GpsEventConsumer {
                 event.timestamp()
         );
 
+        history.setDelayType(event.delayType());
+
         gpsHistoryRepository.save(
                 history
         );
 
+
         // ====================================================
-       // 3. CHECK FOR STATION ARRIVAL
-      // ====================================================
+        // 3. CHECK FOR STATION ARRIVAL
+        // ====================================================
 
         stationArrivalHistoryService.processArrival(
                 event
@@ -118,7 +130,7 @@ public class GpsEventConsumer {
 
 
         // ====================================================
-        // 3. LOG
+        // 4. LOG
         // ====================================================
 
         System.out.println(
@@ -128,11 +140,17 @@ public class GpsEventConsumer {
                         + state.getLatitude()
                         + ", "
                         + state.getLongitude()
+                        + " | Speed="
+                        + state.getSpeedKmh()
+                        + " | Delay="
+                        + state.getDelayType()
         );
 
         System.out.println(
                 "GPS History Saved: "
                         + event.trainNo()
+                        + " | RunId="
+                        + event.runId()
                         + " | speed="
                         + event.speedKmh()
                         + " km/h"

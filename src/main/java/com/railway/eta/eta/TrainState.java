@@ -1,5 +1,6 @@
 package com.railway.eta.eta;
 
+import com.railway.eta.simulator.TrainSimulationState.DelayType;
 import lombok.Data;
 
 import java.time.Instant;
@@ -26,4 +27,6 @@ public class TrainState {
     private String status;
 
     private double distanceToDestinationKm;
+
+    private DelayType delayType = DelayType.NONE;
 }

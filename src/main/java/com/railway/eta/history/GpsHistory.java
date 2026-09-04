@@ -1,5 +1,6 @@
 package com.railway.eta.history;
 
+import com.railway.eta.simulator.TrainSimulationState.DelayType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -35,4 +36,8 @@ public class GpsHistory {
 
     @Column(nullable = false)
     private Instant timestamp;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "delay_type")
+    private DelayType delayType;
 }

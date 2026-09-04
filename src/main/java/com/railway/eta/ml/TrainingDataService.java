@@ -301,6 +301,7 @@ public class TrainingDataService {
             data.setDayOfWeek(
                     dayOfWeek
             );
+            data.setDelayType(gps.getDelayType());
 
             // ------------------------------------------------
             // TARGET

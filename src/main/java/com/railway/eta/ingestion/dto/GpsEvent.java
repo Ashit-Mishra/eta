@@ -1,5 +1,7 @@
 package com.railway.eta.ingestion.dto;
 
+import com.railway.eta.simulator.TrainSimulationState.DelayType;
+
 import java.time.Instant;
 
 public record GpsEvent(
@@ -10,5 +12,7 @@ public record GpsEvent(
         double speedKmh,
         Instant timestamp,
         String currentStation,
-        String nextStation
-) {}
+        String nextStation,
+        DelayType delayType
+) {
+}

@@ -1,5 +1,6 @@
 package com.railway.eta.ml;
 
+import com.railway.eta.simulator.TrainSimulationState;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -22,6 +23,7 @@ public class TrainingData {
 
     // When the training observation was made
     private Instant timestamp;
+    private TrainSimulationState.DelayType delayType;
 
     // -----------------------------
     // Current train conditions
