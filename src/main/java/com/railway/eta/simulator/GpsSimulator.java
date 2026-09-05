@@ -49,7 +49,7 @@ public class GpsSimulator {
     // ========================================================
     // SPEED
     // ========================================================
-    private static final double SIMULATION_SPEED_MULTIPLIER = 10.0;
+    private static final double SIMULATION_SPEED_MULTIPLIER = 30.0;
     private static final double NORMAL_SPEED_KMH = 80.0;
 
     private static final double SPEED_DELAY_KMH = 45.0;
@@ -441,105 +441,55 @@ public class GpsSimulator {
                         )
                         .getSeconds();
 
+        /*
+         * Delay distribution target:
+         *
+         * NONE      = 50%
+         * WEATHER   = 25%
+         * SIGNAL    = 12.5%
+         * SPEED     = 12.5%
+         *
+         * One 800-second cycle is divided using exactly these
+         * proportions. The cycle repeats for the complete run.
+         *
+         * The simulator runs at 10x speed, so the 2-second real-time
+         * tick advances roughly 20 simulated seconds. The phase lengths
+         * are deliberately much larger than one tick so that all delay
+         * types produce multiple GPS observations.
+         */
+        long cycleSeconds = elapsedSimulationSeconds % 800;
+
         TrainSimulationState.DelayType newDelayType;
 
-        // ----------------------------------------------------
-        // 0 - 30 seconds
-        // NORMAL
-        // ----------------------------------------------------
-
-        if (elapsedSimulationSeconds < 30) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.NONE;
+        // 0 - 400 seconds = 50% NONE
+        if (cycleSeconds < 400) {
+            newDelayType = TrainSimulationState.DelayType.NONE;
         }
 
-        // ----------------------------------------------------
-        // 30 - 75 seconds
-        // SPEED DELAY
-        // ----------------------------------------------------
-
-        else if (elapsedSimulationSeconds < 75) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.SPEED;
+        // 400 - 600 seconds = 25% WEATHER
+        else if (cycleSeconds < 600) {
+            newDelayType = TrainSimulationState.DelayType.WEATHER;
         }
 
-        // ----------------------------------------------------
-        // 75 - 105 seconds
-        // NORMAL
-        // ----------------------------------------------------
-
-        else if (elapsedSimulationSeconds < 105) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.NONE;
+        // 600 - 700 seconds = 12.5% SIGNAL
+        else if (cycleSeconds < 700) {
+            newDelayType = TrainSimulationState.DelayType.SIGNAL;
         }
 
-        // ----------------------------------------------------
-        // 105 - 135 seconds
-        // SIGNAL DELAY
-        // ----------------------------------------------------
-
-        else if (elapsedSimulationSeconds < 135) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.SIGNAL;
-        }
-
-        // ----------------------------------------------------
-        // 135 - 165 seconds
-        // NORMAL
-        // ----------------------------------------------------
-
-        else if (elapsedSimulationSeconds < 165) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.NONE;
-        }
-
-        // ----------------------------------------------------
-        // 165 - 225 seconds
-        // WEATHER DELAY
-        // ----------------------------------------------------
-
-        else if (elapsedSimulationSeconds < 225) {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.WEATHER;
-        }
-
-        // ----------------------------------------------------
-        // 225+ seconds
-        // NORMAL
-        // ----------------------------------------------------
-
+        // 700 - 800 seconds = 12.5% SPEED
         else {
-
-            newDelayType =
-                    TrainSimulationState.DelayType.NONE;
+            newDelayType = TrainSimulationState.DelayType.SPEED;
         }
 
-        // ----------------------------------------------------
-        // State changed
-        // ----------------------------------------------------
+        if (newDelayType != state.getCurrentDelayType()) {
 
-        if (
-                newDelayType
-                        != state.getCurrentDelayType()
-        ) {
-
-            state.setCurrentDelayType(
-                    newDelayType
-            );
+            state.setCurrentDelayType(newDelayType);
 
             applyDelaySpeed(state);
 
             printDelayEvent(state);
         }
-
         else {
-
             applyDelaySpeed(state);
         }
     }

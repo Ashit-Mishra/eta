@@ -170,10 +170,22 @@ public class TrainingDataService {
                 continue;
             }
 
-            GpsHistory gps =
-                    findGpsBeforeArrival(
+            Instant previousArrivalTime =
+                    findPreviousArrivalTime(arrivals, arrival);
+
+            DelayType delayType =
+                    findDelayTypeBetweenStations(
                             gpsHistory,
-                            arrival.getActualArrival()
+                            arrival.getActualArrival(),
+                            previousArrivalTime
+                    );
+
+            GpsHistory gps =
+                    findObservationGps(
+                            gpsHistory,
+                            arrival.getActualArrival(),
+                            previousArrivalTime,
+                            delayType
                     );
 
             if (gps == null) {
@@ -302,13 +314,7 @@ public class TrainingDataService {
             data.setDayOfWeek(
                     dayOfWeek
             );
-            data.setDelayType(
-                    findDelayTypeBetweenStations(
-                            gpsHistory,
-                            arrival.getActualArrival(),
-                            findPreviousArrivalTime(arrivals, arrival)
-                    )
-            );
+            data.setDelayType(delayType);
 
             // ------------------------------------------------
             // TARGET
@@ -357,7 +363,194 @@ public class TrainingDataService {
             }
         }
 
-        return allTrainingData;
+        return balanceTrainingData(allTrainingData);
+    }
+
+    // ========================================================
+    // Balance final dataset
+    //
+    // NONE = 50%, WEATHER = 25%, SIGNAL = 12.5%, SPEED = 12.5%
+    // ========================================================
+
+    private List<TrainingData> balanceTrainingData(
+            List<TrainingData> allData
+    ) {
+
+        List<TrainingData> none = new ArrayList<>();
+        List<TrainingData> weather = new ArrayList<>();
+        List<TrainingData> signal = new ArrayList<>();
+        List<TrainingData> speed = new ArrayList<>();
+
+        for (TrainingData data : allData) {
+
+            if (data.getDelayType() == null) {
+                continue;
+            }
+
+            switch (data.getDelayType()) {
+                case NONE -> none.add(data);
+                case WEATHER -> weather.add(data);
+                case SIGNAL -> signal.add(data);
+                case SPEED -> speed.add(data);
+            }
+        }
+
+        System.out.println(
+                "[ML] Available station-level rows: "
+                        + "NONE=" + none.size()
+                        + ", WEATHER=" + weather.size()
+                        + ", SIGNAL=" + signal.size()
+                        + ", SPEED=" + speed.size()
+        );
+
+        java.util.Collections.shuffle(none);
+        java.util.Collections.shuffle(weather);
+        java.util.Collections.shuffle(signal);
+        java.util.Collections.shuffle(speed);
+
+        /*
+         * If all four delay classes are available, preserve the
+         * desired 4:2:1:1 distribution:
+         *
+         * NONE    = 50%
+         * WEATHER = 25%
+         * SIGNAL  = 12.5%
+         * SPEED   = 12.5%
+         */
+        boolean hasAllFour =
+                !none.isEmpty()
+                        && !weather.isEmpty()
+                        && !signal.isEmpty()
+                        && !speed.isEmpty();
+
+        if (hasAllFour) {
+
+            int units = Math.min(
+                    Math.min(none.size() / 4, weather.size() / 2),
+                    Math.min(signal.size(), speed.size())
+            );
+
+            if (units > 0) {
+
+                int noneCount = units * 4;
+                int weatherCount = units * 2;
+                int signalCount = units;
+                int speedCount = units;
+
+                List<TrainingData> balanced =
+                        new ArrayList<>(
+                                noneCount
+                                        + weatherCount
+                                        + signalCount
+                                        + speedCount
+                        );
+
+                balanced.addAll(
+                        none.subList(0, noneCount)
+                );
+
+                balanced.addAll(
+                        weather.subList(0, weatherCount)
+                );
+
+                balanced.addAll(
+                        signal.subList(0, signalCount)
+                );
+
+                balanced.addAll(
+                        speed.subList(0, speedCount)
+                );
+
+                java.util.Collections.shuffle(balanced);
+
+                System.out.println(
+                        "[ML] Balanced dataset: "
+                                + balanced.size()
+                                + " rows | NONE=" + noneCount
+                                + " | WEATHER=" + weatherCount
+                                + " | SIGNAL=" + signalCount
+                                + " | SPEED=" + speedCount
+                );
+
+                return balanced;
+            }
+        }
+
+        /*
+         * A train/run does NOT need to experience every delay type.
+         *
+         * If one or more classes are absent from the station-level
+         * dataset, balance only the classes that actually exist.
+         *
+         * Example:
+         * NONE=100, WEATHER=20, SIGNAL=0, SPEED=10
+         *
+         * Result:
+         * NONE=10, WEATHER=10, SPEED=10
+         *
+         * We do not return [] just because SIGNAL is absent.
+         */
+        List<List<TrainingData>> availableClasses =
+                new ArrayList<>();
+
+        if (!none.isEmpty()) {
+            availableClasses.add(none);
+        }
+
+        if (!weather.isEmpty()) {
+            availableClasses.add(weather);
+        }
+
+        if (!signal.isEmpty()) {
+            availableClasses.add(signal);
+        }
+
+        if (!speed.isEmpty()) {
+            availableClasses.add(speed);
+        }
+
+        if (availableClasses.isEmpty()) {
+
+            System.out.println(
+                    "[ML] No station-level training rows available."
+            );
+
+            return new ArrayList<>();
+        }
+
+        int perClass = Integer.MAX_VALUE;
+
+        for (List<TrainingData> classData : availableClasses) {
+            perClass = Math.min(
+                    perClass,
+                    classData.size()
+            );
+        }
+
+        List<TrainingData> balanced =
+                new ArrayList<>(
+                        perClass * availableClasses.size()
+                );
+
+        for (List<TrainingData> classData : availableClasses) {
+
+            balanced.addAll(
+                    classData.subList(0, perClass)
+            );
+        }
+
+        java.util.Collections.shuffle(balanced);
+
+        System.out.println(
+                "[ML] Balanced dataset using available classes: "
+                        + balanced.size()
+                        + " rows | classes="
+                        + availableClasses.size()
+                        + " | rows/class="
+                        + perClass
+        );
+
+        return balanced;
     }
 
     private RouteStation findRouteStation(
@@ -429,8 +622,56 @@ public class TrainingDataService {
 
 
 // ========================================================
-// Find delay type that occurred between stations
+// Find GPS observation matching the detected delay type
 // ========================================================
+
+    private GpsHistory findObservationGps(
+            List<GpsHistory> gpsHistory,
+            Instant currentArrivalTime,
+            Instant previousArrivalTime,
+            DelayType delayType
+    ) {
+
+        GpsHistory latestBeforeArrival = null;
+        GpsHistory latestMatchingDelay = null;
+
+        for (GpsHistory gps : gpsHistory) {
+
+            Instant timestamp = gps.getTimestamp();
+
+            if (timestamp.isAfter(currentArrivalTime)) {
+                break;
+            }
+
+            if (previousArrivalTime != null
+                    && timestamp.isBefore(previousArrivalTime)) {
+                continue;
+            }
+
+            latestBeforeArrival = gps;
+
+            TrainSimulationState.DelayType gpsDelayType =
+                    gps.getDelayType();
+
+            if (gpsDelayType != null
+                    && gpsDelayType == delayType) {
+                latestMatchingDelay = gps;
+            }
+        }
+
+        // Delay rows use an observation from the actual delay event.
+        // NONE rows use the latest observation before arrival.
+        if (delayType != DelayType.NONE
+                && latestMatchingDelay != null) {
+            return latestMatchingDelay;
+        }
+
+        return latestBeforeArrival;
+    }
+
+    // ========================================================
+    // Find delay type that occurred between stations
+    // ========================================================
 
     private DelayType findDelayTypeBetweenStations(
             List<GpsHistory> gpsHistory,
