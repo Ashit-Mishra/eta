@@ -39,7 +39,7 @@ public class GpsSimulator {
      *
      * without changing the simulation architecture.
      */
-    private static final int MAX_SIMULATED_TRAINS = 10;
+    private static final int MAX_SIMULATED_TRAINS = 100;
 
     /*
      * Generate one GPS event every 2 seconds.
@@ -49,7 +49,7 @@ public class GpsSimulator {
     // ========================================================
     // SPEED
     // ========================================================
-
+    private static final double SIMULATION_SPEED_MULTIPLIER = 10.0;
     private static final double NORMAL_SPEED_KMH = 80.0;
 
     private static final double SPEED_DELAY_KMH = 45.0;
@@ -189,7 +189,8 @@ public class GpsSimulator {
 
         double elapsedSeconds =
                 (currentTime - state.getLastRealTime())
-                        / 1000.0;
+                        / 1000.0
+                        * SIMULATION_SPEED_MULTIPLIER;
 
         state.setLastRealTime(currentTime);
 

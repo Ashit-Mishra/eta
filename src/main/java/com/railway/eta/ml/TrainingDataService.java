@@ -1,6 +1,5 @@
 package com.railway.eta.ml;
 
-import com.railway.eta.eta.DelayCalculationService;
 import com.railway.eta.history.GpsHistory;
 import com.railway.eta.history.GpsHistoryRepository;
 import com.railway.eta.history.HistoricalDelayService;
@@ -10,10 +9,12 @@ import com.railway.eta.history.TrainRun;
 import com.railway.eta.history.TrainRunRepository;
 import com.railway.eta.route.RouteStation;
 import com.railway.eta.route.RouteStationRepository;
+import com.railway.eta.simulator.TrainSimulationState;
 import com.railway.eta.train.Train;
 import com.railway.eta.train.TrainRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.railway.eta.simulator.TrainSimulationState.DelayType;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -301,7 +302,13 @@ public class TrainingDataService {
             data.setDayOfWeek(
                     dayOfWeek
             );
-            data.setDelayType(gps.getDelayType());
+            data.setDelayType(
+                    findDelayTypeBetweenStations(
+                            gpsHistory,
+                            arrival.getActualArrival(),
+                            findPreviousArrivalTime(arrivals, arrival)
+                    )
+            );
 
             // ------------------------------------------------
             // TARGET
@@ -395,6 +402,85 @@ public class TrainingDataService {
         }
 
         return latest;
+    }
+
+    // ========================================================
+// Find previous station arrival time
+// ========================================================
+
+    private Instant findPreviousArrivalTime(
+            List<StationArrivalHistory> arrivals,
+            StationArrivalHistory currentArrival
+    ) {
+
+        Instant previousArrivalTime = null;
+
+        for (StationArrivalHistory arrival : arrivals) {
+
+            if (arrival == currentArrival) {
+                break;
+            }
+
+            previousArrivalTime = arrival.getActualArrival();
+        }
+
+        return previousArrivalTime;
+    }
+
+
+// ========================================================
+// Find delay type that occurred between stations
+// ========================================================
+
+    private DelayType findDelayTypeBetweenStations(
+            List<GpsHistory> gpsHistory,
+            Instant currentArrivalTime,
+            Instant previousArrivalTime
+    ) {
+
+        DelayType detectedDelay = DelayType.NONE;
+
+        for (GpsHistory gps : gpsHistory) {
+
+            Instant timestamp = gps.getTimestamp();
+
+            // Ignore GPS points after current station arrival
+            if (timestamp.isAfter(currentArrivalTime)) {
+                break;
+            }
+
+            // Ignore GPS points before previous station arrival
+            if (previousArrivalTime != null
+                    && timestamp.isBefore(previousArrivalTime)) {
+                continue;
+            }
+
+            TrainSimulationState.DelayType delayType = gps.getDelayType();
+
+            // Old GPS records may have NULL delayType.
+            if (delayType == null) {
+                continue;
+            }
+
+            // Priority:
+            // WEATHER > SIGNAL > SPEED > NONE
+
+            if (delayType == DelayType.WEATHER) {
+                detectedDelay = DelayType.WEATHER;
+            }
+            else if (delayType == TrainSimulationState.DelayType.SIGNAL
+                    && detectedDelay != TrainSimulationState.DelayType.WEATHER) {
+
+                detectedDelay = TrainSimulationState.DelayType.SIGNAL;
+            }
+            else if (delayType == TrainSimulationState.DelayType.SPEED
+                    && detectedDelay == TrainSimulationState.DelayType.NONE) {
+
+                detectedDelay = TrainSimulationState.DelayType.SPEED;
+            }
+        }
+
+        return detectedDelay;
     }
 
     // ========================================================
