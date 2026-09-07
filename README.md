@@ -8,7 +8,7 @@
 
 **A smart backend system for calculating and dynamically forecasting the Estimated Time of Arrival (ETA) of railway trains.**
 
-**Built for Smart Railway ETA Forecasting 🚄**
+**Built for Smart Railway ETA Forecasting **
 
 </div>
 
