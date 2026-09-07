@@ -73,6 +73,10 @@ public class GpsEventConsumer {
                 event.delayType()
         );
 
+        state.setProgressToNextStation(
+                event.progressToNextStation()
+        );
+
         state.setStatus(
                 "RUNNING"
         );

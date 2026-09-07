@@ -336,7 +336,8 @@ public class GpsSimulator {
                         state.getSimulationTime(),
                         from.code(),
                         to.code(),
-                        state.getCurrentDelayType()
+                        state.getCurrentDelayType(),
+                        progress
                 );
 
         // ----------------------------------------------------

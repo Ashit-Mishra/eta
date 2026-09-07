@@ -4,12 +4,12 @@ import com.railway.eta.ml.MlPredictionService;
 import org.springframework.stereotype.Service;
 
 @Service
-public class EtaCalculationService {
+public class StationEtaService {
 
     private final TrainStateService trainStateService;
     private final MlPredictionService mlPredictionService;
 
-    public EtaCalculationService(
+    public StationEtaService(
             TrainStateService trainStateService,
             MlPredictionService mlPredictionService
     ) {
@@ -17,7 +17,7 @@ public class EtaCalculationService {
         this.mlPredictionService = mlPredictionService;
     }
 
-    public EtaResponse calculateEta(String trainNo) {
+    public StationEtaResponse calculateNextStationEta(String trainNo) {
 
         TrainState state =
                 trainStateService.get(trainNo);
@@ -28,49 +28,40 @@ public class EtaCalculationService {
             );
         }
 
+        if (state.getNextStation() == null) {
+            throw new RuntimeException(
+                    "Train has reached its destination"
+            );
+        }
+
         double speedKmh =
                 state.getSpeedKmh();
 
         double distanceToNext =
                 state.getDistanceToNextStationKm();
 
-        double distanceToDestination =
-                state.getDistanceToDestinationKm();
-
-        /*
-         * If the train is stopped because of a signal,
-         * we cannot calculate a movement-based ETA.
-         *
-         * Keep ETA as 0 for now and let the ML model
-         * predict the delay.
-         */
-        double etaToNext = 0.0;
-        double etaToDestination = 0.0;
+        double baseEta = 0.0;
 
         if (speedKmh > 0) {
-            etaToNext =
+            baseEta =
                     (distanceToNext / speedKmh) * 60;
-
-            etaToDestination =
-                    (distanceToDestination / speedKmh) * 60;
         }
 
-        double delayMinutes =
+        double predictedDelay =
                 mlPredictionService.predictDelay(
                         trainNo,
                         state
                 );
 
-        return new EtaResponse(
+        double predictedEta =
+                baseEta + predictedDelay;
+
+        return new StationEtaResponse(
                 trainNo,
-                state.getCurrentStation(),
                 state.getNextStation(),
-                distanceToNext,
-                distanceToDestination,
-                speedKmh,
-                etaToNext,
-                etaToDestination,
-                delayMinutes
+                baseEta,
+                predictedDelay,
+                predictedEta
         );
     }
 }

@@ -13,6 +13,7 @@ public record GpsEvent(
         Instant timestamp,
         String currentStation,
         String nextStation,
-        DelayType delayType
+        DelayType delayType,
+        double progressToNextStation
 ) {
 }

@@ -29,4 +29,5 @@ public class TrainState {
     private double distanceToDestinationKm;
 
     private DelayType delayType = DelayType.NONE;
+    private double progressToNextStation;
 }
