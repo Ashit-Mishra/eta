@@ -3,8 +3,6 @@ package com.railway.eta.history;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
 
 @Service
 public class HistoricalDelayService {
@@ -22,23 +20,22 @@ public class HistoricalDelayService {
             String stationCode,
             Instant currentTime
     ) {
-
-        LocalDate currentDate =
-                currentTime
-                        .atZone(ZoneId.systemDefault())
-                        .toLocalDate();
-
-        Instant startOfCurrentDay =
-                currentDate
-                        .atStartOfDay(ZoneId.systemDefault())
-                        .toInstant();
-
-        return repository
+        /*
+         * Historical delay must not be restricted to the current day.
+         * The simulator creates runs on the current day, so the old
+         * current-day filter caused the historical average to be 0.0.
+         *
+         * Use all recorded arrivals before the current observation.
+         * Negative averages are clamped because the UI metric is
+         * specifically "minutes late".
+         */
+        double average = repository
                 .findHistoricalAverageDelay(
-                        trainNo,
                         stationCode,
-                        startOfCurrentDay
+                        currentTime
                 )
                 .orElse(0.0);
+
+        return Math.max(0.0, average);
     }
 }

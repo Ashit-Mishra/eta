@@ -241,14 +241,48 @@ public class MlPredictionService {
          * Delay type
          * --------------------------------------------------------
          *
-         * We use the currently observed delay type.
+         * The simulator supports:
          *
-         * Future delay type is not known yet.
+         * NONE
+         * SPEED
+         * WEATHER
+         * SIGNAL
+         *
+         * But the ML API currently supports only:
+         *
+         * NONE
+         * SPEED
+         * WEATHER
+         *
+         * Therefore SIGNAL is mapped to NONE only for
+         * the ML request.
+         *
+         * The actual TrainState still retains SIGNAL.
          */
-        String delayType =
-                state.getDelayType() == null
-                        ? "NONE"
-                        : state.getDelayType().name();
+        String delayType = "NONE";
+
+        if (state.getDelayType() != null) {
+
+            switch (state.getDelayType()) {
+
+                case SPEED:
+                    delayType = "SPEED";
+                    break;
+
+                case WEATHER:
+                    delayType = "WEATHER";
+                    break;
+
+                case NONE:
+                    delayType = "NONE";
+                    break;
+
+                case SIGNAL:
+                    // ML model does not currently support SIGNAL
+                    delayType = "NONE";
+                    break;
+            }
+        }
 
         /*
          * --------------------------------------------------------
@@ -265,13 +299,11 @@ public class MlPredictionService {
                         state.getSpeedKmh(),
 
                         /*
-                         * NEW:
                          * Distance specifically to this target.
                          */
                         distanceToTargetKm,
 
                         /*
-                         * NEW:
                          * Distance remaining after this target.
                          */
                         distanceToDestinationKm,

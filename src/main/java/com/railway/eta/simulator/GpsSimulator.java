@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -49,14 +50,15 @@ public class GpsSimulator {
     // ========================================================
     // SPEED
     // ========================================================
-    private static final double SIMULATION_SPEED_MULTIPLIER = 30.0;
-    private static final double NORMAL_SPEED_KMH = 80.0;
+    private static final double SIMULATION_SPEED_MULTIPLIER = 1.0;
 
-    private static final double SPEED_DELAY_KMH = 45.0;
-
-    private static final double WEATHER_DELAY_KMH = 50.0;
-
-    private static final double SIGNAL_DELAY_KMH = 0.0;
+    /*
+     * Normal speed is calculated from the timetable for each segment.
+     * Delay speeds are percentages of that scheduled speed.
+     */
+    private static final double SPEED_DELAY_FACTOR = 0.70;
+    private static final double WEATHER_DELAY_FACTOR = 0.60;
+    private static final double SIGNAL_DELAY_FACTOR = 0.0;
 
     // ========================================================
     // DEPENDENCIES
@@ -86,6 +88,13 @@ public class GpsSimulator {
      * 12033 -> TrainSimulationState
      */
     private final Map<String, TrainSimulationState> simulations =
+            new ConcurrentHashMap<>();
+
+    /*
+     * Normal operating speed for each train segment, derived from
+     * the timetable instead of using one fixed 80 km/h value.
+     */
+    private final Map<String, List<Double>> scheduledSpeedsKmh =
             new ConcurrentHashMap<>();
 
     // ========================================================
@@ -213,6 +222,19 @@ public class GpsSimulator {
         updateDelayState(state);
 
         // ----------------------------------------------------
+        // Wait at a station until its scheduled departure time.
+        //
+        // This prevents the simulator from immediately starting
+        // the next segment after reaching a station.
+        // ----------------------------------------------------
+
+        if (isWaitingForScheduledDeparture(state)) {
+            state.setSpeedKmh(0.0);
+            sendStationWaitingEvent(state);
+            return;
+        }
+
+        // ----------------------------------------------------
         // Calculate distance travelled
         //
         // distance = speed × time / 3600
@@ -222,6 +244,57 @@ public class GpsSimulator {
                 state.getSpeedKmh()
                         * elapsedSeconds
                         / 3600.0;
+
+        // ----------------------------------------------------
+        // HARD ARRIVAL RESTRICTION
+        //
+        // Never allow the train to reach the next station before
+        // its scheduled arrival time. If the current speed would
+        // make it arrive early, cap this tick's movement so that
+        // the train reaches the station no earlier than scheduled.
+        // ----------------------------------------------------
+
+        Instant scheduledArrival =
+                getScheduledArrivalTime(
+                        state,
+                        state.getCurrentSegment()
+                );
+
+        if (
+                scheduledArrival != null
+                        &&
+                        state.getSimulationTime()
+                                .isBefore(scheduledArrival)
+        ) {
+            double secondsUntilArrival =
+                    java.time.Duration.between(
+                            state.getSimulationTime(),
+                            scheduledArrival
+                    ).toMillis() / 1000.0;
+
+            double remainingDistance =
+                    segments
+                            .get(state.getCurrentSegment())
+                            .distanceKm()
+                            - state.getDistanceTravelledKm();
+
+            if (
+                    secondsUntilArrival > 0
+                            &&
+                            remainingDistance > 0
+            ) {
+                double maximumAllowedDistance =
+                        remainingDistance
+                                * elapsedSeconds
+                                / secondsUntilArrival;
+
+                distanceThisTick =
+                        Math.min(
+                                distanceThisTick,
+                                maximumAllowedDistance
+                        );
+            }
+        }
 
         state.setDistanceTravelledKm(
                 state.getDistanceTravelledKm()
@@ -365,6 +438,166 @@ public class GpsSimulator {
         );
     }
 
+    private Instant getScheduledArrivalTime(
+            TrainSimulationState state,
+            int segmentIndex
+    ) {
+        if (segmentIndex < 0) {
+            return null;
+        }
+
+        Long routeId =
+                findRouteId(state.getTrainNo());
+
+        List<RouteStation> routeStations =
+                routeStationRepository
+                        .findByRouteIdOrderBySequenceNumberAsc(
+                                routeId
+                        );
+
+        int arrivalStationIndex =
+                segmentIndex + 1;
+
+        if (
+                arrivalStationIndex < 0
+                        ||
+                        arrivalStationIndex >= routeStations.size()
+        ) {
+            return null;
+        }
+
+        RouteStation station =
+                routeStations.get(arrivalStationIndex);
+
+        LocalTime arrivalTime =
+                station.getArrivalTime();
+
+        if (arrivalTime == null) {
+            return null;
+        }
+
+        int stationDay =
+                station.getDay() == null
+                        ? 1
+                        : station.getDay();
+
+        LocalDate scheduledDate =
+                LocalDate.now()
+                        .plusDays(stationDay - 1L);
+
+        ZoneId zone =
+                ZoneId.systemDefault();
+
+        return ZonedDateTime.of(
+                scheduledDate,
+                arrivalTime,
+                zone
+        ).toInstant();
+    }
+
+    private boolean isWaitingForScheduledDeparture(
+            TrainSimulationState state
+    ) {
+        List<RouteStation> routeStations =
+                routeStationRepository
+                        .findByRouteIdOrderBySequenceNumberAsc(
+                                findRouteId(state.getTrainNo())
+                        );
+
+        int currentSegment = state.getCurrentSegment();
+
+        // currentSegment points to the segment leaving the current station.
+        // Therefore the current station is at the same index.
+        if (currentSegment <= 0 || currentSegment >= routeStations.size()) {
+            return false;
+        }
+
+        RouteStation currentStation =
+                routeStations.get(currentSegment);
+
+        LocalTime departureTime =
+                currentStation.getDepartureTime();
+
+        if (departureTime == null) {
+            return false;
+        }
+
+        int stationDay =
+                currentStation.getDay() == null
+                        ? 1
+                        : currentStation.getDay();
+
+        LocalDate scheduledDate =
+                LocalDate.now().plusDays(stationDay - 1L);
+
+        ZoneId zone = ZoneId.systemDefault();
+
+        Instant scheduledDeparture =
+                ZonedDateTime.of(
+                        scheduledDate,
+                        departureTime,
+                        zone
+                ).toInstant();
+
+        return state.getSimulationTime()
+                .isBefore(scheduledDeparture);
+    }
+
+    private Long findRouteId(String trainNo) {
+        return trainRepository
+                .findByTrainNo(trainNo)
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Train not found: " + trainNo
+                        )
+                )
+                .getRoute()
+                .getId();
+    }
+
+    private void sendStationWaitingEvent(
+            TrainSimulationState state
+    ) {
+        List<RouteStation> routeStations =
+                routeStationRepository
+                        .findByRouteIdOrderBySequenceNumberAsc(
+                                findRouteId(state.getTrainNo())
+                        );
+
+        int currentSegment = state.getCurrentSegment();
+
+        if (currentSegment < 0 ||
+                currentSegment >= routeStations.size()) {
+            return;
+        }
+
+        RouteStation station =
+                routeStations.get(currentSegment);
+
+        var stationData = station.getStation();
+
+        GpsEvent event =
+                new GpsEvent(
+                        state.getTrainNo(),
+                        state.getRunId(),
+                        stationData.getLatitude(),
+                        stationData.getLongitude(),
+                        0.0,
+                        state.getSimulationTime(),
+                        stationData.getCode(),
+                        currentSegment + 1 < routeStations.size()
+                                ? routeStations
+                                .get(currentSegment + 1)
+                                .getStation()
+                                .getCode()
+                                : stationData.getCode(),
+                        state.getCurrentDelayType(),
+                        1.0
+                );
+
+        producer.send(event);
+    }
+
     // ========================================================
     // COMPLETE TRAIN
     // ========================================================
@@ -503,40 +736,45 @@ public class GpsSimulator {
             TrainSimulationState state
     ) {
 
+        double normalSpeed = getScheduledSpeedKmh(state);
+
         switch (state.getCurrentDelayType()) {
 
             case NONE:
-
-                state.setSpeedKmh(
-                        NORMAL_SPEED_KMH
-                );
-
+                state.setSpeedKmh(normalSpeed);
                 break;
 
             case SPEED:
-
-                state.setSpeedKmh(
-                        SPEED_DELAY_KMH
-                );
-
+                state.setSpeedKmh(normalSpeed * SPEED_DELAY_FACTOR);
                 break;
 
             case SIGNAL:
-
-                state.setSpeedKmh(
-                        SIGNAL_DELAY_KMH
-                );
-
+                state.setSpeedKmh(normalSpeed * SIGNAL_DELAY_FACTOR);
                 break;
 
             case WEATHER:
-
-                state.setSpeedKmh(
-                        WEATHER_DELAY_KMH
-                );
-
+                state.setSpeedKmh(normalSpeed * WEATHER_DELAY_FACTOR);
                 break;
         }
+    }
+
+    private double getScheduledSpeedKmh(
+            TrainSimulationState state
+    ) {
+        List<Double> speeds =
+                scheduledSpeedsKmh.get(state.getTrainNo());
+
+        if (speeds == null || speeds.isEmpty()) {
+            return 80.0;
+        }
+
+        int segmentIndex = state.getCurrentSegment();
+
+        if (segmentIndex < 0 || segmentIndex >= speeds.size()) {
+            return speeds.get(speeds.size() - 1);
+        }
+
+        return speeds.get(segmentIndex);
     }
 
     // ========================================================
@@ -569,7 +807,7 @@ public class GpsSimulator {
 
                 System.out.println(
                         "Speed : "
-                                + NORMAL_SPEED_KMH
+                                + 80
                                 + " km/h"
                 );
 
@@ -589,7 +827,7 @@ public class GpsSimulator {
 
                 System.out.println(
                         "Speed : "
-                                + SPEED_DELAY_KMH
+                                + 45
                                 + " km/h"
                 );
 
@@ -609,7 +847,7 @@ public class GpsSimulator {
 
                 System.out.println(
                         "Speed : "
-                                + SIGNAL_DELAY_KMH
+                                + 0
                                 + " km/h"
                 );
 
@@ -629,7 +867,7 @@ public class GpsSimulator {
 
                 System.out.println(
                         "Speed : "
-                                + WEATHER_DELAY_KMH
+                                + 50
                                 + " km/h"
                 );
 
@@ -903,6 +1141,90 @@ public class GpsSimulator {
         System.out.println();
     }
 
+    private List<Double> calculateScheduledSpeeds(
+            List<SimulatedSegment> segments,
+            List<RouteStation> routeStations
+    ) {
+        List<Double> speeds = new java.util.ArrayList<>();
+
+        int count = Math.min(
+                segments.size(),
+                Math.max(0, routeStations.size() - 1)
+        );
+
+        for (int i = 0; i < count; i++) {
+
+            RouteStation from = routeStations.get(i);
+            RouteStation to = routeStations.get(i + 1);
+
+            LocalTime fromTime =
+                    from.getDepartureTime() != null
+                            ? from.getDepartureTime()
+                            : from.getArrivalTime();
+
+            LocalTime toTime =
+                    to.getArrivalTime() != null
+                            ? to.getArrivalTime()
+                            : to.getDepartureTime();
+
+            if (fromTime == null || toTime == null) {
+                speeds.add(80.0);
+                continue;
+            }
+
+            int fromDay =
+                    from.getDay() == null ? 1 : from.getDay();
+
+            int toDay =
+                    to.getDay() == null ? fromDay : to.getDay();
+
+            LocalDate baseDate =
+                    LocalDate.of(2000, 1, 1);
+
+            LocalDateTime fromDateTime =
+                    LocalDateTime.of(
+                            baseDate.plusDays(fromDay - 1L),
+                            fromTime
+                    );
+
+            LocalDateTime toDateTime =
+                    LocalDateTime.of(
+                            baseDate.plusDays(toDay - 1L),
+                            toTime
+                    );
+
+            if (!toDateTime.isAfter(fromDateTime)) {
+                toDateTime = toDateTime.plusDays(1);
+            }
+
+            double travelHours =
+                    java.time.Duration.between(
+                            fromDateTime,
+                            toDateTime
+                    ).toSeconds() / 3600.0;
+
+            double distanceKm =
+                    segments.get(i).distanceKm();
+
+            double speed =
+                    travelHours > 0
+                            ? distanceKm / travelHours
+                            : 80.0;
+
+            if (!Double.isFinite(speed) || speed <= 0) {
+                speed = 80.0;
+            }
+
+            speeds.add(speed);
+        }
+
+        while (speeds.size() < segments.size()) {
+            speeds.add(80.0);
+        }
+
+        return speeds;
+    }
+
     // ========================================================
     // INITIALIZE ONE TRAIN
     // ========================================================
@@ -950,6 +1272,19 @@ public class GpsSimulator {
                     "No route stations found"
             );
         }
+
+        /*
+         * Build the normal speed for every segment from the timetable.
+         * This prevents the simulator from arriving early simply because
+         * a fixed 80 km/h speed was faster than the real schedule.
+         */
+        scheduledSpeedsKmh.put(
+                trainNo,
+                calculateScheduledSpeeds(
+                        segments,
+                        routeStations
+                )
+        );
 
         // ----------------------------------------------------
         // First station departure

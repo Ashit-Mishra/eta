@@ -23,7 +23,10 @@ public class RouteStationService {
                 .map(routeStation -> new RouteStationResponse(
                         routeStation.getSequenceNumber(),
                         routeStation.getStation().getCode(),
-                        routeStation.getStation().getName()
+                        routeStation.getStation().getName(),
+                        routeStation.getArrivalTime(),
+                        routeStation.getDepartureTime(),
+                        routeStation.getDay()
                 ))
                 .toList();
     }

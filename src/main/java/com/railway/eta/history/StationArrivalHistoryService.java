@@ -153,17 +153,11 @@ public class StationArrivalHistoryService {
         StationArrivalHistory history =
                 new StationArrivalHistory();
 
-        history.setTrainNo(
-                trainNo
-        );
+        history.setTrainNo(trainNo);
 
-        history.setRunId(
-                runId
-        );
+        history.setRunId(runId);
 
-        history.setStationCode(
-                stationCode
-        );
+        history.setStationCode(stationCode);
 
         history.setScheduledArrival(
                 scheduledArrival
@@ -178,5 +172,39 @@ public class StationArrivalHistoryService {
         );
 
         repository.save(history);
+    }
+
+    // ============================================================
+    // GET ACTUAL ARRIVAL HISTORY FOR CURRENT RUN
+    // ============================================================
+
+    @Transactional(readOnly = true)
+    public List<StationArrivalHistoryResponse>
+    getCurrentRunArrivalHistory(String trainNo) {
+
+        return repository
+                .findTopByTrainNoOrderByActualArrivalDesc(trainNo)
+                .map(latest -> {
+
+                    Long currentRunId =
+                            latest.getRunId();
+
+                    return repository
+                            .findByRunIdOrderByActualArrivalAsc(
+                                    currentRunId
+                            )
+                            .stream()
+                            .map(history ->
+                                    new StationArrivalHistoryResponse(
+                                            history.getStationCode(),
+                                            history.getScheduledArrival(),
+                                            history.getActualArrival(),
+                                            history.getDelayMinutes()
+                                    )
+                            )
+                            .toList();
+
+                })
+                .orElse(List.of());
     }
 }

@@ -28,13 +28,15 @@ public interface StationArrivalHistoryRepository
     @Query("""
             SELECT AVG(h.delayMinutes)
             FROM StationArrivalHistory h
-            WHERE h.trainNo = :trainNo
-              AND h.stationCode = :stationCode
+            WHERE h.stationCode = :stationCode
               AND h.actualArrival < :before
+              AND h.delayMinutes >= 0
             """)
     Optional<Double> findHistoricalAverageDelay(
-            @Param("trainNo") String trainNo,
             @Param("stationCode") String stationCode,
             @Param("before") Instant before
     );
+
+    Optional<StationArrivalHistory>
+    findTopByTrainNoOrderByActualArrivalDesc(String trainNo);
 }
